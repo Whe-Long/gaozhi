@@ -345,7 +345,7 @@ export default function App() {
       if (text.length > MAX_LENGTH) { event.currentTarget.value = draftRef.current.text; setToast('文稿已达到第一版的长度上限，请拆分文稿。'); return }
       const nextSelection = readSelection(event.currentTarget)
       scrollToCaret.current = true
-      apply(withText(draftRef.current, text), nextSelection, !composition.current)
+      apply(withText(draftRef.current, text, nextSelection.end), nextSelection, !composition.current)
     }} onCompositionStart={() => {
       composition.current = { draft: draftRef.current, selection: selectionRef.current }
       setComposing(true)
@@ -359,7 +359,8 @@ export default function App() {
         return
       }
       if (before && before.draft.text !== text) remember(before)
-      apply(withText(draftRef.current, text), readSelection(event.currentTarget), false)
+      const nextSelection = readSelection(event.currentTarget)
+      apply(withText(draftRef.current, text, nextSelection.end), nextSelection, false)
     }} onKeyDown={event => {
       if (composition.current || event.nativeEvent.isComposing) return
       const mod = event.metaKey || event.ctrlKey

@@ -88,21 +88,51 @@ export function validateDraft(value: unknown): Draft {
   }
 }
 
-/** Preserve paragraph formats around an edit; new paragraphs default to body. */
-export function withText(draft: Draft, text: string): Draft {
+/**
+ * Common prefix and suffix of an edit. The caret marks where inserted text
+ * ends, which decides between equivalent diffs such as Enter at the end of
+ * one paragraph versus the start of the next.
+ */
+function editRange(before: string, after: string, caret?: number): { prefix: number; suffix: number } {
+  const max = Math.min(before.length, after.length)
+  const prefixLength = (limit: number) => {
+    let n = 0
+    while (n < limit && after[n] === before[n]) n++
+    return n
+  }
+  const suffixLength = (limit: number) => {
+    let n = 0
+    while (n < limit && after[after.length - 1 - n] === before[before.length - 1 - n]) n++
+    return n
+  }
+  if (caret === undefined) {
+    const prefix = prefixLength(max)
+    return { prefix, suffix: suffixLength(max - prefix) }
+  }
+  const end = Math.max(0, Math.min(after.length, caret))
+  const suffix = suffixLength(Math.min(max, after.length - end))
+  return { prefix: prefixLength(Math.min(max - suffix, end)), suffix }
+}
+
+/**
+ * Preserve paragraph formats around an edit; new paragraphs default to body.
+ * A format stays with the line that keeps the paragraph's original text.
+ */
+export function withText(draft: Draft, text: string, caret?: number): Draft {
   if (text === draft.text) return draft
-  let prefix = 0
-  while (prefix < text.length && prefix < draft.text.length && text[prefix] === draft.text[prefix]) prefix++
-  let suffix = 0
-  while (suffix < text.length - prefix && suffix < draft.text.length - prefix &&
-    text[text.length - 1 - suffix] === draft.text[draft.text.length - 1 - suffix]) suffix++
+  const { prefix, suffix } = editRange(draft.text, text, caret)
   const lineAt = (s: string, end: number) => (s.slice(0, end).match(/\n/g) ?? []).length
   const startLine = lineAt(draft.text, prefix)
   const endLine = lineAt(draft.text, draft.text.length - suffix)
   const added = (text.slice(prefix, text.length - suffix).match(/\n/g) ?? []).length
+  // With nothing kept before the edit on its first line, the paragraph's
+  // text continues on the last replaced line, so its format moves there.
+  const headEmpty = prefix === 0 || draft.text[prefix - 1] === '\n'
+  const replaced = Array.from({ length: added + 1 }, (_, i): BlockKind =>
+    i === (headEmpty ? added : 0) ? draft.formats[headEmpty ? endLine : startLine] ?? 'body' : 'body')
   const formats: BlockKind[] = [
-    ...draft.formats.slice(0, startLine + 1),
-    ...Array<BlockKind>(added).fill('body'),
+    ...draft.formats.slice(0, startLine),
+    ...replaced,
     ...draft.formats.slice(endLine + 1),
   ]
   return { ...draft, text, formats: text.split('\n').map((_, i) => formats[i] ?? 'body') }
