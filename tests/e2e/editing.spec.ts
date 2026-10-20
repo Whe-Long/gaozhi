@@ -18,16 +18,47 @@ test.describe('typing and editing', () => {
     await setCaret(page, 2)
     const cdp = await page.context().newCDPSession(page)
     await cdp.send('Input.imeSetComposition', { text: 'ni', selectionStart: 2, selectionEnd: 2 })
-    await expect(page.locator('.paper-caret.composing')).toHaveCount(1)
+    await expect(page.locator('.preedit')).toHaveText('ni')
     await cdp.send('Input.imeSetComposition', { text: 'nihao', selectionStart: 5, selectionEnd: 5 })
     await cdp.send('Input.insertText', { text: '你好' })
     await expect.poll(() => paperText(page)).toBe('开头你好')
-    await expect(page.locator('.paper-caret.composing')).toHaveCount(0)
+    await expect(page.locator('.preedit')).toHaveCount(0)
 
     await page.keyboard.press('ControlOrMeta+z')
     await expect.poll(() => paperText(page)).toBe('开头')
     await page.keyboard.press('ControlOrMeta+Shift+z')
     await expect.poll(() => paperText(page)).toBe('开头你好')
+  })
+
+  test('pinyin being composed stays out of the grid and shows as one string', async ({ page }) => {
+    await openWith(page, makeDraft('我说\n后文'))
+    const positions = () => glyphs(page).evaluateAll(nodes => nodes.map(n => `${n.textContent}@${(n as HTMLElement).style.left},${(n as HTMLElement).style.top}`))
+    const before = await positions()
+    await setCaret(page, 2)
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Input.imeSetComposition', { text: 'wo shi', selectionStart: 6, selectionEnd: 6 })
+
+    const preedit = page.locator('.preedit')
+    await expect(preedit).toHaveText('wo shi')
+    // The preedit starts at the caret cell: first row, third cell.
+    await expect(preedit).toHaveAttribute('style', /left: 60px; top: 0px/)
+    expect(await positions()).toEqual(before)
+    await expect(page.locator('.status-bar')).toContainText('4 字')
+
+    await cdp.send('Input.insertText', { text: '我是' })
+    await expect.poll(() => paperText(page)).toBe('我说我是后文')
+    await expect(preedit).toHaveCount(0)
+  })
+
+  test('composing over a selection hides the replaced text until commit', async ({ page }) => {
+    await openWith(page, makeDraft('旧字新'))
+    await setCaret(page, 0, 2)
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Input.imeSetComposition', { text: 'xin', selectionStart: 3, selectionEnd: 3 })
+    await expect(page.locator('.preedit')).toHaveText('xin')
+    await expect.poll(() => paperText(page)).toBe('新')
+    await cdp.send('Input.insertText', { text: '新' })
+    await expect.poll(() => paperText(page)).toBe('新新')
   })
 
   test('pasting several paragraphs keeps them as separate body paragraphs', async ({ page, context }) => {

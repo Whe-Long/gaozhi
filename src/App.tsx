@@ -6,6 +6,12 @@ import { loadDraft, readBackup, type DraftStorage } from './storage'
 
 interface Selection { start: number; end: number; direction: 'forward' | 'backward' | 'none' }
 interface Snapshot { draft: Draft; selection: Selection }
+/**
+ * IME text being composed. The paper shows `base` (the draft without the
+ * composition) and draws `text` as one string at `start`, so pinyin letters
+ * and their separators never occupy cells.
+ */
+interface Preedit { base: Draft; start: number; text: string }
 const START: Selection = { start: 0, end: 0, direction: 'none' }
 /** A caret parked in a blank cell; its padding is inserted only when text is entered. */
 type VirtualCaret = HitTarget & { cell: Position }
@@ -37,7 +43,8 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>(START)
   const selectionRef = useRef(selection)
   const [focused, setFocused] = useState(false)
-  const [composing, setComposing] = useState(false)
+  const [preedit, setPreedit] = useState<Preedit | null>(null)
+  const composing = preedit !== null
   const composition = useRef<Snapshot | null>(null)
   const undo = useRef<Snapshot[]>([])
   const redo = useRef<Snapshot[]>([])
@@ -60,13 +67,14 @@ export default function App() {
   const virtualRef = useRef<VirtualCaret | null>(null)
   // Set after padding is inserted so the text that follows joins its undo step.
   const mergeNextEdit = useRef(false)
-  const layout = useMemo(() => layoutDocument(draft), [draft])
+  const shownDraft = preedit?.base ?? draft
+  const layout = useMemo(() => layoutDocument(shownDraft), [shownDraft])
   const layoutRef = useRef<Layout>(layout)
   layoutRef.current = layout
   const scale = zoom === 'fit' ? fitScale : zoom / 100
   const { settings } = draft
   const activeOffset = Math.min(focusOffset(selection), draft.text.length)
-  const caret = virtualCaret?.cell ?? layout.carets[activeOffset] ?? { page: 0, row: 0, column: 0 }
+  const caret = virtualCaret?.cell ?? layout.carets[preedit ? preedit.start : activeOffset] ?? { page: 0, row: 0, column: 0 }
   const activeBlock = draft.text.slice(0, activeOffset).split('\n').length - 1
   const activeKind = draft.formats[activeBlock] ?? 'body'
   const gridWidth = settings.columns * settings.cellSize
@@ -384,9 +392,10 @@ export default function App() {
                 <div className="paper-head"><span>文 稿</span><span>MANUSCRIPT</span></div>
                 <div className="paper-grid" data-page={pageIndex} ref={el => { grids.current[pageIndex] = el }} style={{ left: gridLeft, top: gridTop, width: gridWidth, height: gridHeight, '--cell-size': `${settings.cellSize}px`, '--row-gap': `${settings.rowGap}px` } as CSSProperties} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={() => { dragAnchor.current = null }} onPointerCancel={() => { dragAnchor.current = null }}>
                   <div className="grid-lines" aria-hidden="true">{Array.from({ length: settings.rows }, (_, row) => <div className="grid-row" key={row} style={{ height: settings.cellSize, marginBottom: row === settings.rows - 1 ? 0 : settings.rowGap, gridTemplateColumns: `repeat(${settings.columns}, 1fr)` }}>{Array.from({ length: settings.columns }, (_, col) => <span key={col} />)}</div>)}</div>
-                  <div className="glyph-layer" aria-hidden="true">{glyphs.map(glyph => <span key={`${glyph.start}-${glyph.end}`} className={`glyph ${glyph.hanging ? 'hanging' : ''} ${glyph.kind === 'title' ? 'title-glyph' : ''} ${glyph.end > selection.start && glyph.start < selection.end && focused ? 'selected-glyph' : ''} ${composing && glyph.end > (composition.current?.selection.start ?? activeOffset) && glyph.start < activeOffset ? 'composing-glyph' : ''}`} data-start={glyph.start} style={{ left: glyph.column * settings.cellSize, top: glyph.row * (settings.cellSize + settings.rowGap), width: glyph.hanging ? settings.cellSize * 0.5 : glyph.span * settings.cellSize, height: settings.cellSize, fontSize: settings.cellSize * (glyph.text.length === 2 && /^[A-Za-z0-9]+$/.test(glyph.text) ? 0.62 : 0.76) }}>{glyph.text}</span>)}</div>
-                  {pageIndex === caret.page && <span className={`paper-caret ${focused && selection.start === selection.end ? 'visible' : ''} ${composing ? 'composing' : ''}`} ref={caretElement} aria-hidden="true" style={{ left: Math.min(caret.column, settings.columns - 0.05) * settings.cellSize, top: caret.row * (settings.cellSize + settings.rowGap) + settings.cellSize * 0.12, height: settings.cellSize * 0.76 }} />}
-                  {!draft.text && pageIndex === 0 && <span className="empty-hint" style={{ top: settings.cellSize + settings.rowGap + 12 }}>点击任意位置，写下第一句话。</span>}
+                  <div className="glyph-layer" aria-hidden="true">{glyphs.map(glyph => <span key={`${glyph.start}-${glyph.end}`} className={`glyph ${glyph.hanging ? 'hanging' : ''} ${glyph.kind === 'title' ? 'title-glyph' : ''} ${!composing && glyph.end > selection.start && glyph.start < selection.end && focused ? 'selected-glyph' : ''}`} data-start={glyph.start} style={{ left: glyph.column * settings.cellSize, top: glyph.row * (settings.cellSize + settings.rowGap), width: glyph.hanging ? settings.cellSize * 0.5 : glyph.span * settings.cellSize, height: settings.cellSize, fontSize: settings.cellSize * (glyph.text.length === 2 && /^[A-Za-z0-9]+$/.test(glyph.text) ? 0.62 : 0.76) }}>{glyph.text}</span>)}</div>
+                  {pageIndex === caret.page && <span className={`paper-caret ${focused && !composing && selection.start === selection.end ? 'visible' : ''}`} ref={caretElement} aria-hidden="true" style={{ left: Math.min(caret.column, settings.columns - 0.05) * settings.cellSize, top: caret.row * (settings.cellSize + settings.rowGap) + settings.cellSize * 0.12, height: settings.cellSize * 0.76 }} />}
+                  {preedit?.text && pageIndex === caret.page && <span className="preedit" aria-hidden="true" style={{ left: Math.min(caret.column, settings.columns) * settings.cellSize, top: caret.row * (settings.cellSize + settings.rowGap), height: settings.cellSize, lineHeight: `${settings.cellSize}px`, fontSize: settings.cellSize * 0.56 }}>{preedit.text}</span>}
+                  {!shownDraft.text && !composing && pageIndex === 0 && <span className="empty-hint" style={{ top: settings.cellSize + settings.rowGap + 12 }}>点击任意位置，写下第一句话。</span>}
                 </div>
                 <div className="paper-foot"><span>{settings.columns} × {settings.rows} = {settings.columns * settings.rows}</span><span>稿纸 · GAOZHI</span><span>第 {pageIndex + 1} 页</span></div>
               </article>
@@ -415,14 +424,24 @@ export default function App() {
       apply(withText(draftRef.current, text, nextSelection.end), nextSelection, !composition.current && !takeMergeNextEdit())
     }} onPaste={() => {
       if (virtualRef.current) materializeVirtualCaret()
-    }} onCompositionStart={() => {
+    }} onCompositionStart={event => {
       // Composition input cannot be cancelled, so pad before it begins.
       if (virtualRef.current) materializeVirtualCaret()
-      composition.current = { draft: draftRef.current, selection: selectionRef.current }
-      setComposing(true)
+      const current = draftRef.current
+      // The DOM selection is current even when no select event has synced it yet.
+      const selectionNow = readSelection(event.currentTarget)
+      const { start, end } = selectionNow
+      selectionRef.current = selectionNow
+      composition.current = { draft: current, selection: selectionNow }
+      // Composing replaces any selection, so the paper shows the text without it.
+      const base = start === end ? current : withText(current, current.text.slice(0, start) + current.text.slice(end), start)
+      setPreedit({ base, start, text: '' })
+    }} onCompositionUpdate={event => {
+      const text = event.data
+      setPreedit(current => current && { ...current, text })
     }} onCompositionEnd={event => {
       const before = composition.current
-      composition.current = null; setComposing(false)
+      composition.current = null; setPreedit(null)
       const text = event.currentTarget.value
       if (text.length > MAX_LENGTH) {
         if (before) apply(before.draft, before.selection, false, true)
