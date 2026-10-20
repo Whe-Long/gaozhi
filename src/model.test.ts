@@ -106,6 +106,12 @@ describe('withText', () => {
     expect(withText(base, 'AB\n1\n2\nCD', 7).formats).toEqual(['title', 'body', 'body', 'signature'])
   })
 
+  it('uses the caret when pasted text repeats the start of the next paragraph', () => {
+    // "\nC" pasted at the end of "AB": the new line is "C", and "CD" keeps its format.
+    expect(withText(base, 'AB\nC\nCD', 5).formats).toEqual(['title', 'body', 'signature'])
+    expect(withText(base, 'AB\nC\nCD').formats).not.toEqual(['title', 'body', 'signature'])
+  })
+
   it('falls back to a prefix-first diff without a caret', () => {
     expect(withText(base, 'ABCD').formats).toEqual(['title'])
   })

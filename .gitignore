@@ -29,3 +29,7 @@ local-data/
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.example.json
+
+# Playwright output
+test-results/
+playwright-report/
