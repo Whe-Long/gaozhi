@@ -15,11 +15,14 @@ export interface Draft {
   version: 1
   name: string
   text: string
+  /** Pages shown even when the text is shorter, so blank pages can be written on and printed. */
+  minPages: number
   settings: Settings
 }
 
 export const STORAGE_KEY = 'gaozhi:draft:v1'
 export const MAX_LENGTH = 20_000
+export const MAX_PAGES = 99
 export const PAGE_WIDTH = 794
 export const PAGE_HEIGHT = 1123
 export const DEFAULT_SETTINGS: Settings = {
@@ -28,7 +31,7 @@ export const DEFAULT_SETTINGS: Settings = {
 }
 
 export function emptyDraft(): Draft {
-  return { version: 1, name: '未命名文稿', text: '', settings: { ...DEFAULT_SETTINGS } }
+  return { version: 1, name: '未命名文稿', text: '', minPages: 1, settings: { ...DEFAULT_SETTINGS } }
 }
 
 export function sampleDraft(): Draft {
@@ -74,6 +77,7 @@ export function validateDraft(value: unknown): Draft {
   return {
     version: 1, name: typeof d.name === 'string' ? d.name.slice(0, 100) : '导入的文稿',
     text: d.text.replace(/\r\n?/g, '\n'),
+    minPages: bounded(d.minPages, 1, 1, MAX_PAGES),
     settings: normalizeSettings(d.settings),
   }
 }

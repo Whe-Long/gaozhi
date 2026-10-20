@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { ArrowDownToLine, ArrowUpFromLine, Check, ChevronDown, FilePlus2, HelpCircle, Minus, PanelLeftClose, PanelLeftOpen, Plus, Printer, Redo2, RotateCcw, Settings2, Undo2, X } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpFromLine, Check, ChevronDown, FilePlus2, HelpCircle, Minus, PanelLeftClose, PanelLeftOpen, Plus, Printer, Redo2, RotateCcw, Settings2, Trash2, Undo2, X } from 'lucide-react'
 import { hitTest, layoutDocument, locate, type HitTarget, type Layout, type Position } from './layout'
-import { DEFAULT_SETTINGS, emptyDraft, MAX_LENGTH, maxCellSize, normalizeSettings, PAGE_HEIGHT, PAGE_WIDTH, sampleDraft, STORAGE_KEY, validateDraft, type Draft, type Settings } from './model'
+import { DEFAULT_SETTINGS, emptyDraft, MAX_LENGTH, MAX_PAGES, maxCellSize, normalizeSettings, PAGE_HEIGHT, PAGE_WIDTH, sampleDraft, STORAGE_KEY, validateDraft, type Draft, type Settings } from './model'
 import { loadDraft, readBackup, type DraftStorage } from './storage'
 
 interface Selection { start: number; end: number; direction: 'forward' | 'backward' | 'none' }
@@ -83,11 +83,22 @@ export default function App() {
   const gridHeight = settings.rows * (settings.cellSize + settings.rowGap) - settings.rowGap
   const gridLeft = (PAGE_WIDTH - gridWidth) / 2
   const gridTop = Math.max(112, (PAGE_HEIGHT - gridHeight) / 2)
+  // Pages beyond the text stay visible so they can be written on and printed.
+  const pageTotal = Math.max(layout.pages, draft.minPages)
+  const pageTotalRef = useRef(pageTotal)
+  pageTotalRef.current = pageTotal
+  const scrollToPage = useRef<number | null>(null)
   const pageGlyphs = useMemo(() => {
-    const pages = Array.from({ length: layout.pages }, () => [] as typeof layout.glyphs)
+    const pages = Array.from({ length: pageTotal }, () => [] as typeof layout.glyphs)
     for (const glyph of layout.glyphs) pages[glyph.page].push(glyph)
     return pages
-  }, [layout])
+  }, [layout, pageTotal])
+
+  useLayoutEffect(() => {
+    if (scrollToPage.current === null) return
+    grids.current[scrollToPage.current]?.closest('.page-group')?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    scrollToPage.current = null
+  }, [pageTotal])
 
   function syncNativeInput() {
     const rect = caretElement.current?.getBoundingClientRect()
@@ -250,6 +261,21 @@ export default function App() {
     }
   }
 
+  function addPage() {
+    const current = draftRef.current
+    const total = Math.max(layoutRef.current.pages, current.minPages)
+    if (total >= MAX_PAGES) { setToast(`一份文稿最多 ${MAX_PAGES} 页。`); return }
+    scrollToPage.current = total
+    apply({ ...current, minPages: total + 1 })
+  }
+
+  /** Only a trailing page without text can be removed. */
+  function removeBlankPage() {
+    const current = draftRef.current
+    const total = Math.max(layoutRef.current.pages, current.minPages)
+    if (total > layoutRef.current.pages) apply({ ...current, minPages: total - 1 })
+  }
+
   function newDocument(example = false) {
     if (draftRef.current.text && !window.confirm(example ? '载入示例会替换当前文稿。当前草稿可以通过撤销找回，是否继续？' : '新建文稿会替换当前草稿。建议先导出备份；操作后也可以撤销。是否继续？')) return
     apply(example ? sampleDraft() : { ...emptyDraft(), settings: draftRef.current.settings }, START, true, true)
@@ -258,7 +284,7 @@ export default function App() {
   function targetAtPoint(clientX: number, clientY: number): HitTarget {
     let bestPage = 0
     let distance = Infinity
-    grids.current.slice(0, layoutRef.current.pages).forEach((el, index) => {
+    grids.current.slice(0, pageTotalRef.current).forEach((el, index) => {
       const rect = el?.getBoundingClientRect()
       if (!rect) return
       const d = Math.max(rect.top - clientY, 0, clientY - rect.bottom)
@@ -382,7 +408,9 @@ export default function App() {
         <div className="workspace-heading"><span>誊抄预览</span><span>点击稿纸开始输入</span></div>
         <div className="pages">
           {pageGlyphs.map((glyphs, pageIndex) => <div className="page-group" key={pageIndex}>
-            <div className="page-caption"><span>第 {String(pageIndex + 1).padStart(2, '0')} 页</span><span>{settings.columns} × {settings.rows}</span></div>
+            <div className="page-caption"><span>第 {String(pageIndex + 1).padStart(2, '0')} 页</span>{pageIndex === pageTotal - 1 && pageIndex >= layout.pages
+              ? <button className="page-delete" onClick={removeBlankPage}><Trash2 size={11} />删除此页</button>
+              : <span>{settings.columns} × {settings.rows}</span>}</div>
             <div className="paper-shell" style={{ width: PAGE_WIDTH * scale, height: PAGE_HEIGHT * scale }}>
               <article className={`paper font-${settings.font}`} style={{ width: PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${scale})`, '--grid-color': settings.gridColor } as CSSProperties} aria-label={`第 ${pageIndex + 1} 页稿纸`}>
                 <div className="paper-head"><span>文 稿</span><span>MANUSCRIPT</span></div>
@@ -397,11 +425,12 @@ export default function App() {
               </article>
             </div>
           </div>)}
+          <button className="add-page" onClick={addPage} disabled={pageTotal >= MAX_PAGES}><Plus size={15} />添加一页</button>
         </div>
       </div>
     </main>
 
-    <footer className="status-bar"><div><span><b>{layout.characters.toLocaleString()}</b> 字<span className="stat-detail">（含标点与空格）</span></span><i /><span>共 <b>{layout.pages}</b> 页</span></div><div><span>第 {caret.page + 1} 页 · 第 {caret.row + 1} 行 · 第 {Math.min(settings.columns, Math.floor(caret.column) + 1)} 格</span><i /><details className="help-menu"><summary aria-label="使用说明"><HelpCircle size={15} /><span>使用说明</span></summary><div className="popover help-popover"><strong>像在纸上写字一样</strong><p>点击稿纸定位光标，直接输入或粘贴。按 Enter 另起一段。</p><p>点击段尾或下方的空白格子也能书写，中间空出的格子会自动补上全角空格。段首需要空格时，请自行输入。</p><p>用方向键移动光标，按 Shift 配合方向键选择文字。</p><p>⌘ / Ctrl + Z 撤销<br />⌘ / Ctrl + Shift + Z 重做<br />⌘ / Ctrl + S 导出备份</p><p>打印时选择 A4、100% 缩放，关闭浏览器页眉页脚。格线属于页面内容，无须开启背景图形。</p></div></details></div></footer>
+    <footer className="status-bar"><div><span><b>{layout.characters.toLocaleString()}</b> 字<span className="stat-detail">（含标点与空格）</span></span><i /><span>共 <b>{pageTotal}</b> 页</span></div><div><span>第 {caret.page + 1} 页 · 第 {caret.row + 1} 行 · 第 {Math.min(settings.columns, Math.floor(caret.column) + 1)} 格</span><i /><details className="help-menu"><summary aria-label="使用说明"><HelpCircle size={15} /><span>使用说明</span></summary><div className="popover help-popover"><strong>像在纸上写字一样</strong><p>点击稿纸定位光标，直接输入或粘贴。按 Enter 另起一段。</p><p>点击段尾或下方的空白格子也能书写，中间空出的格子会自动补上全角空格。段首需要空格时，请自行输入。</p><p>需要更多稿纸时，点最后一页下方的“添加一页”；末尾没有文字的空白页可在页眉处删除。</p><p>用方向键移动光标，按 Shift 配合方向键选择文字。</p><p>⌘ / Ctrl + Z 撤销<br />⌘ / Ctrl + Shift + Z 重做<br />⌘ / Ctrl + S 导出备份</p><p>打印时选择 A4、100% 缩放，关闭浏览器页眉页脚。格线属于页面内容，无须开启背景图形。</p></div></details></div></footer>
 
     <p id="editor-instructions" className="sr-only">在稿纸上输入正文。Enter 开始新段落。使用方向键移动，Shift 加方向键选择。全文不含换行最多 20,000 个文本编码单元。</p>
     <textarea ref={textarea} className="native-input" aria-label="稿纸正文" aria-describedby="editor-instructions" spellCheck={false} autoCapitalize="off" autoCorrect="off" value={draft.text} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onSelect={event => {

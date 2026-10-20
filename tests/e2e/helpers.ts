@@ -4,8 +4,8 @@ import { BACKUP_KEY } from '../../src/storage'
 
 export { BACKUP_KEY, STORAGE_KEY }
 
-export function makeDraft(text: string, settings: Partial<Settings> = {}): Draft {
-  return { version: 1, name: '测试文稿', text, settings: { ...DEFAULT_SETTINGS, ...settings } }
+export function makeDraft(text: string, settings: Partial<Settings> = {}, minPages = 1): Draft {
+  return { version: 1, name: '测试文稿', text, minPages, settings: { ...DEFAULT_SETTINGS, ...settings } }
 }
 
 /**

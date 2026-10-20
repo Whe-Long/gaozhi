@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, MAX_LENGTH, maxCellSize, normalizeSettings, sampleDraft, validateDraft } from './model'
+import { DEFAULT_SETTINGS, emptyDraft, MAX_LENGTH, MAX_PAGES, maxCellSize, normalizeSettings, sampleDraft, validateDraft } from './model'
 
 describe('normalizeSettings', () => {
   it('falls back to defaults for missing or invalid input', () => {
@@ -60,6 +60,15 @@ describe('validateDraft', () => {
     expect(d.name).toHaveLength(100)
     expect(d.settings.columns).toBe(24)
     expect(validateDraft({ version: 1, text: '' }).name).toBe('导入的文稿')
+  })
+
+  it('keeps a valid minimum page count and repairs invalid ones', () => {
+    expect(emptyDraft().minPages).toBe(1)
+    expect(validateDraft({ version: 1, text: '' }).minPages).toBe(1)
+    expect(validateDraft({ version: 1, text: '', minPages: 3 }).minPages).toBe(3)
+    expect(validateDraft({ version: 1, text: '', minPages: 0 }).minPages).toBe(1)
+    expect(validateDraft({ version: 1, text: '', minPages: 1000 }).minPages).toBe(MAX_PAGES)
+    expect(validateDraft({ version: 1, text: '', minPages: 'x' }).minPages).toBe(1)
   })
 
   it('round-trips the sample draft', () => {

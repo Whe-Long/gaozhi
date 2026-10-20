@@ -5,7 +5,7 @@ import { DEFAULT_SETTINGS, sampleDraft, type Draft, type Settings } from './mode
 const SMALL: Settings = { ...DEFAULT_SETTINGS, columns: 10, rows: 10 }
 
 function draft(text: string, settings: Partial<Settings> = {}): Draft {
-  return { version: 1, name: 'test', text, settings: { ...SMALL, ...settings } }
+  return { version: 1, name: 'test', text, minPages: 1, settings: { ...SMALL, ...settings } }
 }
 
 const cells = (glyphs: Glyph[]) => glyphs.map(g => [g.text, g.page, g.row, g.column])
