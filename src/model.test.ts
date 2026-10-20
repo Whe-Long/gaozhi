@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS, emptyDraft, MAX_LENGTH, maxCellSize, normalizeSettings, sampleDraft, validateDraft, withText, type BlockKind, type Draft } from './model'
-
-function draftOf(text: string, formats: BlockKind[]): Draft {
-  return { ...emptyDraft(), text, formats }
-}
+import { DEFAULT_SETTINGS, MAX_LENGTH, maxCellSize, normalizeSettings, sampleDraft, validateDraft } from './model'
 
 describe('normalizeSettings', () => {
   it('falls back to defaults for missing or invalid input', () => {
@@ -40,82 +36,34 @@ describe('validateDraft', () => {
   it('rejects values that are not drafts', () => {
     expect(() => validateDraft(null)).toThrow('有效')
     expect(() => validateDraft('text')).toThrow('有效')
-    expect(() => validateDraft({ version: 2, text: '', formats: [] })).toThrow('不受支持')
-    expect(() => validateDraft({ version: 1, text: 1, formats: [] })).toThrow('不受支持')
+    expect(() => validateDraft({ version: 2, text: '' })).toThrow('不受支持')
+    expect(() => validateDraft({ version: 1, text: 1 })).toThrow('不受支持')
   })
 
   it('enforces the length limit', () => {
-    expect(() => validateDraft({ version: 1, text: 'a'.repeat(MAX_LENGTH + 1), formats: [] })).toThrow('20,000')
-    expect(validateDraft({ version: 1, text: 'a'.repeat(MAX_LENGTH), formats: [] }).text).toHaveLength(MAX_LENGTH)
+    expect(() => validateDraft({ version: 1, text: 'a'.repeat(MAX_LENGTH + 1) })).toThrow('20,000')
+    expect(validateDraft({ version: 1, text: 'a'.repeat(MAX_LENGTH) }).text).toHaveLength(MAX_LENGTH)
   })
 
-  it('normalizes line endings and aligns formats with paragraphs', () => {
-    const d = validateDraft({ version: 1, text: '一\r\n二\r三', formats: ['title', 'bogus'] })
-    expect(d.text).toBe('一\n二\n三')
-    expect(d.formats).toEqual(['title', 'body', 'body'])
+  it('normalizes line endings', () => {
+    expect(validateDraft({ version: 1, text: '一\r\n二\r三' }).text).toBe('一\n二\n三')
+  })
+
+  it('accepts older drafts and drops their retired paragraph formats', () => {
+    const d = validateDraft({ version: 1, text: '标题\n正文', formats: ['title', 'body'] })
+    expect(d.text).toBe('标题\n正文')
+    expect(d).not.toHaveProperty('formats')
   })
 
   it('sanitizes the name and settings', () => {
     const d = validateDraft({ version: 1, text: '', formats: [], name: 'x'.repeat(150), settings: { columns: 50 } })
     expect(d.name).toHaveLength(100)
     expect(d.settings.columns).toBe(24)
-    expect(validateDraft({ version: 1, text: '', formats: [] }).name).toBe('导入的文稿')
+    expect(validateDraft({ version: 1, text: '' }).name).toBe('导入的文稿')
   })
 
   it('round-trips the sample draft', () => {
     const sample = sampleDraft()
     expect(validateDraft(JSON.parse(JSON.stringify(sample)))).toEqual(sample)
-  })
-})
-
-describe('withText', () => {
-  const base = draftOf('AB\nCD', ['title', 'signature'])
-
-  it('returns the same draft when text is unchanged', () => {
-    expect(withText(base, 'AB\nCD')).toBe(base)
-  })
-
-  it('keeps formats when editing inside a paragraph', () => {
-    const next = withText(base, 'AXB\nCD', 2)
-    expect(next.formats).toEqual(['title', 'signature'])
-    expect(base.text).toBe('AB\nCD')
-  })
-
-  it('gives a paragraph split in the middle a body tail', () => {
-    expect(withText(base, 'A\nB\nCD', 2).formats).toEqual(['title', 'body', 'signature'])
-  })
-
-  it('inserts a body paragraph when Enter is pressed at the end of a paragraph', () => {
-    // Caret after the new line break: the empty paragraph is the new one.
-    expect(withText(base, 'AB\n\nCD', 3).formats).toEqual(['title', 'body', 'signature'])
-  })
-
-  it('keeps the following format when Enter is pressed at the start of a paragraph', () => {
-    // Caret at the start of "CD": the empty paragraph sits before it.
-    expect(withText(base, 'AB\n\nCD', 4).formats).toEqual(['title', 'body', 'signature'])
-  })
-
-  it('keeps the first format when two paragraphs merge', () => {
-    expect(withText(base, 'ABCD', 2).formats).toEqual(['title'])
-  })
-
-  it('removes an empty paragraph with Backspace without moving neighbouring formats', () => {
-    const d = draftOf('AB\n\nCD', ['title', 'body', 'signature'])
-    expect(withText(d, 'AB\nCD', 2).formats).toEqual(['title', 'signature'])
-    expect(withText(d, 'AB\nCD', 3).formats).toEqual(['title', 'signature'])
-  })
-
-  it('marks every pasted paragraph as body', () => {
-    expect(withText(base, 'AB\n1\n2\nCD', 7).formats).toEqual(['title', 'body', 'body', 'signature'])
-  })
-
-  it('uses the caret when pasted text repeats the start of the next paragraph', () => {
-    // "\nC" pasted at the end of "AB": the new line is "C", and "CD" keeps its format.
-    expect(withText(base, 'AB\nC\nCD', 5).formats).toEqual(['title', 'body', 'signature'])
-    expect(withText(base, 'AB\nC\nCD').formats).not.toEqual(['title', 'body', 'signature'])
-  })
-
-  it('falls back to a prefix-first diff without a caret', () => {
-    expect(withText(base, 'ABCD').formats).toEqual(['title'])
   })
 })

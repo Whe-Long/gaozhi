@@ -1,11 +1,11 @@
-import { type BlockKind, type Draft, type Settings } from './model'
+import { type Draft, type Settings } from './model'
 
 export interface Position { page: number; row: number; column: number }
 export interface Glyph extends Position {
-  text: string; start: number; end: number; span: number; hanging: boolean; kind: BlockKind
+  text: string; start: number; end: number; span: number; hanging: boolean
 }
 /** Where a paragraph's text stops: its last visual line and the caret after its last glyph. */
-export interface ParagraphEnd { line: number; offset: number; column: number; kind: BlockKind }
+export interface ParagraphEnd { line: number; offset: number; column: number }
 export interface Layout {
   glyphs: Glyph[]; carets: Position[]; ends: ParagraphEnd[]; pages: number; characters: number
 }
@@ -13,8 +13,7 @@ export interface Layout {
 export interface HitTarget { offset: number; padding: string; cell: Position | null }
 /** Full-width space: one blank cell on the paper. */
 export const BLANK = '\u3000'
-/** Formats whose trailing cells can be filled; aligned formats compute their own margins. */
-const PADDABLE = new Set<BlockKind>(['body', 'salutation'])
+
 interface Token { text: string; start: number; end: number; span: number }
 const CLOSE = new Set(Array.from('，。、；：？！）》」』】〕〉〗〙〛”’％%…'))
 const OPEN = new Set(Array.from('（《「『【〔〈〖〘〚“‘'))
@@ -56,10 +55,7 @@ export function layoutDocument(draft: Draft): Layout {
   const blocks = draft.text.split('\n')
 
   blocks.forEach((text, blockIndex) => {
-    const kind = draft.formats[blockIndex] ?? 'body'
     let col = 0
-    const firstGlyph = glyphs.length
-    const firstLine = line
     const tokens = tokenize(text, offset, settings)
     carets[offset] = position(line, col)
     let hangingCount = 0
@@ -83,7 +79,7 @@ export function layoutDocument(draft: Draft): Layout {
         hangingCount = 0
       }
       const drawColumn = canHang ? columns - 0.02 + hangingCount * 0.48 : col
-      const glyph: Glyph = { ...position(line, drawColumn), ...token, hanging: canHang, kind }
+      const glyph: Glyph = { ...position(line, drawColumn), ...token, hanging: canHang }
       glyphs.push(glyph)
       for (let p = token.start; p < token.end; p++) {
         // UTF-16 offsets are preserved for textarea selections. A grapheme is
@@ -96,21 +92,8 @@ export function layoutDocument(draft: Draft): Layout {
       carets[token.end] = position(line, Math.min(col, columns))
     }
 
-    // Alignment is applied per visual line without changing source offsets.
-    if (kind === 'title' || kind === 'signature') {
-      for (let visual = firstLine; visual <= line; visual++) {
-        const onLine = glyphs.slice(firstGlyph).filter(g => g.page * rows + g.row === visual)
-        const width = onLine.reduce((n, g) => Math.max(n, g.column + (g.hanging ? 0 : g.span)), 0)
-        const shift = kind === 'title' ? Math.floor((columns - width) / 2) : columns - width
-        for (const g of onLine) g.column += shift
-        for (let p = offset; p <= offset + text.length; p++) {
-          const c = carets[p]
-          if (c && c.page * rows + c.row === visual) c.column += shift
-        }
-      }
-    }
     const end = offset + text.length
-    ends.push({ line, offset: end, column: carets[end].column, kind })
+    ends.push({ line, offset: end, column: carets[end].column })
     if (blockIndex < blocks.length - 1) {
       offset += text.length + 1
       line++
@@ -152,7 +135,7 @@ export function locate(layout: Layout, page: number, row: number, column: number
   }
   const end = layout.ends.find(p => p.line === line)
   const gap = end ? cellColumn - Math.ceil(end.column) : 0
-  if (end && PADDABLE.has(end.kind) && gap > 0) {
+  if (end && gap > 0) {
     return { offset: end.offset, padding: BLANK.repeat(gap), cell }
   }
   return { offset: hitTest(layout, page, row, column, rows), padding: '', cell: null }

@@ -24,12 +24,11 @@ describe('loadDraft', () => {
   })
 
   it('restores a valid stored draft', () => {
-    const stored = { ...emptyDraft(), name: '测试', text: '你好\n世界', formats: ['title', 'body'] }
+    const stored = { ...emptyDraft(), name: '测试', text: '你好\n世界' }
     const result = loadDraft(memoryStorage({ [STORAGE_KEY]: JSON.stringify(stored) }))
     expect(result.error).toBe('')
     expect(result.autosave).toBe(true)
     expect(result.draft.text).toBe('你好\n世界')
-    expect(result.draft.formats).toEqual(['title', 'body'])
   })
 
   it('copies an unreadable draft to the backup key before anything can overwrite it', () => {

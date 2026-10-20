@@ -1,15 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { BLANK, graphemes, hitTest, layoutDocument, locate, type Glyph } from './layout'
-import { DEFAULT_SETTINGS, sampleDraft, type BlockKind, type Draft, type Settings } from './model'
+import { DEFAULT_SETTINGS, sampleDraft, type Draft, type Settings } from './model'
 
 const SMALL: Settings = { ...DEFAULT_SETTINGS, columns: 10, rows: 10 }
 
-function draft(text: string, formats?: BlockKind[], settings: Partial<Settings> = {}): Draft {
-  return {
-    version: 1, name: 'test', text,
-    formats: formats ?? text.split('\n').map(() => 'body'),
-    settings: { ...SMALL, ...settings },
-  }
+function draft(text: string, settings: Partial<Settings> = {}): Draft {
+  return { version: 1, name: 'test', text, settings: { ...SMALL, ...settings } }
 }
 
 const cells = (glyphs: Glyph[]) => glyphs.map(g => [g.text, g.page, g.row, g.column])
@@ -50,24 +46,22 @@ describe('layoutDocument: paragraphs', () => {
     expect(cells(glyphs)).toEqual([['一', 0, 0, 0], ['二', 0, 1, 0]])
   })
 
-  it('keeps salutations flush left', () => {
-    expect(layoutDocument(draft('老师：', ['salutation'])).glyphs[0].column).toBe(0)
+  it('lays out every paragraph the same way, flush left', () => {
+    const { glyphs } = layoutDocument(draft('标题\n张三'))
+    expect(cells(glyphs)).toEqual([['标', 0, 0, 0], ['题', 0, 0, 1], ['张', 0, 1, 0], ['三', 0, 1, 1]])
   })
 
-  it('centres titles on each line', () => {
-    const { glyphs } = layoutDocument(draft('标题', ['title']))
-    expect(cells(glyphs)).toEqual([['标', 0, 0, 4], ['题', 0, 0, 5]])
-    expect(glyphs[0].kind).toBe('title')
+  it('centres the sample title and right-aligns its signature with spaces alone', () => {
+    const { glyphs } = layoutDocument(sampleDraft())
+    expect(glyphFor(glyphs, '写')).toMatchObject({ row: 0, column: 6 })
+    const lastRow = glyphs.at(-1)!.row
+    expect(glyphs.at(-1)).toMatchObject({ text: '日', column: 19 })
+    expect(glyphs.filter(g => g.row === lastRow - 1).at(-1)).toMatchObject({ text: '后', column: 19 })
   })
 
-  it('right-aligns signatures', () => {
-    const { glyphs } = layoutDocument(draft('张三', ['signature']))
-    expect(cells(glyphs)).toEqual([['张', 0, 0, 8], ['三', 0, 0, 9]])
-  })
-
-  it('moves carets together with aligned glyphs', () => {
-    const { carets } = layoutDocument(draft('张三', ['signature']))
-    expect(carets.map(c => c.column)).toEqual([8, 9, 10])
+  it('positions spaced-out lines by their full-width spaces', () => {
+    const { glyphs } = layoutDocument(draft('　　　　标题'))
+    expect(glyphFor(glyphs, '标').column).toBe(4)
   })
 })
 
@@ -75,13 +69,13 @@ describe('layoutDocument: pagination', () => {
   const full = '字'.repeat(100)
 
   it('fills a page exactly without starting a new one', () => {
-    const layout = layoutDocument(draft(full, ['salutation']))
+    const layout = layoutDocument(draft(full))
     expect(layout.pages).toBe(1)
     expect(layout.glyphs.at(-1)).toMatchObject({ page: 0, row: 9, column: 9 })
   })
 
   it('continues on the next page when the page is full', () => {
-    const layout = layoutDocument(draft(full + '多', ['salutation']))
+    const layout = layoutDocument(draft(full + '多'))
     expect(layout.pages).toBe(2)
     expect(layout.glyphs.at(-1)).toMatchObject({ page: 1, row: 0, column: 0 })
   })
@@ -91,7 +85,7 @@ describe('layoutDocument: pagination', () => {
   })
 
   it('respects custom row counts', () => {
-    expect(layoutDocument(draft('一\n'.repeat(11), undefined, { rows: 12 })).pages).toBe(1)
+    expect(layoutDocument(draft('一\n'.repeat(11), { rows: 12 })).pages).toBe(1)
   })
 })
 
@@ -114,14 +108,14 @@ describe('layoutDocument: punctuation', () => {
   })
 
   it('carries the previous character in strict mode instead of starting a line with punctuation', () => {
-    const { glyphs } = layoutDocument(draft(almostFull + '十，后', undefined, { punctuation: 'strict' }))
+    const { glyphs } = layoutDocument(draft(almostFull + '十，后', { punctuation: 'strict' }))
     expect(glyphs.some(g => g.hanging)).toBe(false)
     expect(glyphFor(glyphs, '十')).toMatchObject({ row: 1, column: 0 })
     expect(glyphFor(glyphs, '，')).toMatchObject({ row: 1, column: 1 })
   })
 
   it('keeps consecutive closing marks with their character in strict mode', () => {
-    const { glyphs } = layoutDocument(draft(almostFull + '十。”', undefined, { punctuation: 'strict' }))
+    const { glyphs } = layoutDocument(draft(almostFull + '十。”', { punctuation: 'strict' }))
     expect(cells(glyphs).slice(-3)).toEqual([['十', 0, 1, 0], ['。', 0, 1, 1], ['”', 0, 1, 2]])
   })
 
@@ -133,13 +127,13 @@ describe('layoutDocument: punctuation', () => {
 
   it('places a closing mark at the end of the last row on the page', () => {
     const text = '字'.repeat(100) + '。'
-    const { glyphs, pages } = layoutDocument(draft(text, ['salutation']))
+    const { glyphs, pages } = layoutDocument(draft(text))
     expect(pages).toBe(1)
     expect(glyphs.at(-1)).toMatchObject({ page: 0, row: 9, hanging: true })
   })
 
   it('gives ellipses and dashes two cells without splitting them', () => {
-    const { glyphs } = layoutDocument(draft('啊……——', ['salutation']))
+    const { glyphs } = layoutDocument(draft('啊……——'))
     expect(glyphs.map(g => [g.text, g.column, g.span])).toEqual([['啊', 0, 1], ['……', 1, 2], ['——', 3, 2]])
   })
 
@@ -161,22 +155,22 @@ describe('layoutDocument: punctuation', () => {
 
 describe('layoutDocument: numbers and Latin letters', () => {
   it('pairs half-width letters and digits into one cell', () => {
-    const { glyphs } = layoutDocument(draft('2026年', ['salutation']))
+    const { glyphs } = layoutDocument(draft('2026年'))
     expect(glyphs.map(g => [g.text, g.column])).toEqual([['20', 0], ['26', 1], ['年', 2]])
   })
 
   it('leaves an odd trailing character in its own cell', () => {
-    const { glyphs } = layoutDocument(draft('202年', ['salutation']))
+    const { glyphs } = layoutDocument(draft('202年'))
     expect(glyphs.map(g => g.text)).toEqual(['20', '2', '年'])
   })
 
   it('uses one cell per character when pairing is off', () => {
-    const { glyphs } = layoutDocument(draft('AI', ['salutation'], { pairAscii: false }))
+    const { glyphs } = layoutDocument(draft('AI', { pairAscii: false }))
     expect(glyphs.map(g => [g.text, g.column])).toEqual([['A', 0], ['I', 1]])
   })
 
   it('places carets at half cells inside a pair', () => {
-    const { carets } = layoutDocument(draft('ab', ['salutation']))
+    const { carets } = layoutDocument(draft('ab'))
     expect(carets.map(c => c.column)).toEqual([0, 0.5, 1])
   })
 })
@@ -184,7 +178,7 @@ describe('layoutDocument: numbers and Latin letters', () => {
 describe('layoutDocument: carets and statistics', () => {
   it('defines a caret for every UTF-16 offset', () => {
     const text = '你好😀\n\nab，“好”……\n张三'
-    const { carets } = layoutDocument(draft(text, ['title', 'body', 'body', 'signature']))
+    const { carets } = layoutDocument(draft(text))
     expect(carets).toHaveLength(text.length + 1)
     for (let i = 0; i <= text.length; i++) expect(carets[i], `offset ${i}`).toBeDefined()
   })
@@ -200,7 +194,7 @@ describe('layoutDocument: carets and statistics', () => {
 })
 
 describe('hitTest', () => {
-  const d = draft('AB\n\nCD', ['salutation', 'salutation', 'salutation'], { pairAscii: false })
+  const d = draft('AB\n\nCD', { pairAscii: false })
   const layout = layoutDocument(d)
   const at = (row: number, column: number, page = 0) => hitTest(layout, page, row, column, SMALL.rows)
 
@@ -224,7 +218,7 @@ describe('hitTest', () => {
 })
 
 describe('locate', () => {
-  const d = draft('AB\n\nCD', ['body', 'body', 'title'], { pairAscii: false })
+  const d = draft('AB\n\nCD', { pairAscii: false })
   const layout = layoutDocument(d)
   const at = (row: number, column: number, page = 0) => locate(layout, page, row, column, d.settings)
 
@@ -255,13 +249,12 @@ describe('locate', () => {
     expect(at(0, 10).cell).toEqual({ page: 0, row: 0, column: 9 })
   })
 
-  it('snaps around centred titles and right-aligned signatures', () => {
-    expect(at(2, 8)).toMatchObject({ padding: '', cell: null })
-    expect(at(2, 0)).toMatchObject({ offset: 4, padding: '', cell: null })
+  it('pads after the last paragraph line like any other', () => {
+    expect(at(2, 8)).toEqual({ offset: 6, padding: BLANK.repeat(6), cell: { page: 0, row: 2, column: 8 } })
   })
 
   it('snaps on lines that continue on the next row', () => {
-    const strict = draft('一二三四五六七八九十，', ['body'], { punctuation: 'strict' })
+    const strict = draft('一二三四五六七八九十，', { punctuation: 'strict' })
     const wrapped = layoutDocument(strict)
     expect(locate(wrapped, 0, 0, 9.5, strict.settings)).toMatchObject({ padding: '', cell: null })
   })

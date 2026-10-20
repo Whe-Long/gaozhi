@@ -22,7 +22,6 @@ test.describe('writing in blank cells', () => {
     await page.keyboard.type('夏')
     await expect(glyphs(page).filter({ hasText: '夏' })).toHaveAttribute('style', cellStyle(3, 2))
     await expect.poll(async () => (await storedDraft(page))?.text).toBe(`春天\n\n\n${B.repeat(2)}夏`)
-    await expect.poll(async () => (await storedDraft(page))?.formats).toEqual(['body', 'body', 'body', 'body'])
   })
 
   test('padding and the typed text undo as one step', async ({ page }) => {
@@ -78,11 +77,4 @@ test.describe('writing in blank cells', () => {
     await expect(page.getByLabel('正文首行缩进')).toHaveCount(0)
     await expect(glyphs(page).first()).toHaveAttribute('style', cellStyle(0, 0))
   })
-})
-
-test('blank cells beside a title snap to the title text', async ({ page }) => {
-  await openWith(page, makeDraft('标题', ['title']))
-  await clickCell(page, 0, 15)
-  await page.keyboard.type('一')
-  await expect.poll(() => paperText(page)).toBe('标题一')
 })

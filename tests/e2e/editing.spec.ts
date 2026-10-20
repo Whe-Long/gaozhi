@@ -63,7 +63,7 @@ test.describe('typing and editing', () => {
 
   test('pasting several paragraphs keeps them as separate body paragraphs', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
-    await openWith(page, makeDraft('标题', ['title']))
+    await openWith(page, makeDraft('标题'))
     await setCaret(page, 2)
     await page.evaluate(() => navigator.clipboard.writeText('\n第一段。\n第二段。'))
     await page.keyboard.press('ControlOrMeta+v')
@@ -91,35 +91,12 @@ test.describe('typing and editing', () => {
     await expect.poll(() => paperText(page)).toBe(text.replace(/\n/g, ''))
   })
 
-  test('Enter at the end of a title keeps the next paragraph format', async ({ page }) => {
-    await openWith(page, makeDraft('标题\n张三', ['title', 'signature']))
-    await setCaret(page, 2)
-    await page.keyboard.press('Enter')
-    await expect(page.getByRole('button', { name: '正文', exact: true })).toHaveAttribute('aria-pressed', 'true')
-    // The signature stays right-aligned, now on row 3.
-    await expect(glyphs(page).filter({ hasText: '张' })).toHaveAttribute('style', /left: 540px; top: 84px/)
-  })
-
-  test('pasting a line that repeats the next paragraph start keeps formats in place', async ({ page, context }) => {
-    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
-    await openWith(page, makeDraft('标题\n张三', ['title', 'signature']))
-    await setCaret(page, 2)
-    await page.evaluate(() => navigator.clipboard.writeText('\n张'))
-    await page.keyboard.press('ControlOrMeta+v')
-    await expect.poll(() => paperText(page)).toBe('标题张张三')
-    // The pasted "张" is a body line; "张三" stays right-aligned below it.
-    await expect(glyphs(page).nth(2)).toHaveAttribute('style', /left: 0px; top: 42px/)
-    await expect(glyphs(page).nth(3)).toHaveAttribute('style', /left: 540px; top: 84px/)
-  })
-
-  test('format buttons change the paragraph under the caret', async ({ page }) => {
-    await openWith(page, makeDraft('落款人'))
-    await setCaret(page, 1)
-    await page.getByRole('button', { name: '落款' }).click()
-    await expect(page.getByRole('button', { name: '落款' })).toHaveAttribute('aria-pressed', 'true')
-    // Right-aligned: the last character sits in the last of 20 cells.
-    await expect(glyphs(page).filter({ hasText: '人' })).toHaveAttribute('style', /left: 570px/)
-    await expect(editor(page)).toBeFocused()
+  test('there are no paragraph format buttons or storage note', async ({ page }) => {
+    await openWith(page, makeDraft('正文'))
+    for (const label of ['正文', '标题', '称呼', '落款']) {
+      await expect(page.getByRole('button', { name: label, exact: true })).toHaveCount(0)
+    }
+    await expect(page.getByText('文字仅保存在此浏览器中')).toHaveCount(0)
   })
 
   test('arrow keys move between visual lines', async ({ page }) => {

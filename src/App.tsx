@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowDownToLine, ArrowUpFromLine, Check, ChevronDown, FilePlus2, HelpCircle, Minus, PanelLeftClose, PanelLeftOpen, Plus, Printer, Redo2, RotateCcw, Settings2, Undo2, X } from 'lucide-react'
 import { hitTest, layoutDocument, locate, type HitTarget, type Layout, type Position } from './layout'
-import { BLOCK_LABELS, DEFAULT_SETTINGS, emptyDraft, MAX_LENGTH, maxCellSize, normalizeSettings, PAGE_HEIGHT, PAGE_WIDTH, sampleDraft, STORAGE_KEY, validateDraft, withText, type BlockKind, type Draft, type Settings } from './model'
+import { DEFAULT_SETTINGS, emptyDraft, MAX_LENGTH, maxCellSize, normalizeSettings, PAGE_HEIGHT, PAGE_WIDTH, sampleDraft, STORAGE_KEY, validateDraft, type Draft, type Settings } from './model'
 import { loadDraft, readBackup, type DraftStorage } from './storage'
 
 interface Selection { start: number; end: number; direction: 'forward' | 'backward' | 'none' }
@@ -75,8 +75,6 @@ export default function App() {
   const { settings } = draft
   const activeOffset = Math.min(focusOffset(selection), draft.text.length)
   const caret = virtualCaret?.cell ?? layout.carets[preedit ? preedit.start : activeOffset] ?? { page: 0, row: 0, column: 0 }
-  const activeBlock = draft.text.slice(0, activeOffset).split('\n').length - 1
-  const activeKind = draft.formats[activeBlock] ?? 'body'
   const gridWidth = settings.columns * settings.cellSize
   const gridHeight = settings.rows * (settings.cellSize + settings.rowGap) - settings.rowGap
   const gridLeft = (PAGE_WIDTH - gridWidth) / 2
@@ -208,16 +206,6 @@ export default function App() {
     apply({ ...draftRef.current, settings: normalizeSettings({ ...draftRef.current.settings, ...patch }) })
   }
 
-  function setBlock(kind: BlockKind) {
-    const current = draftRef.current
-    const sel = selectionRef.current
-    const first = current.text.slice(0, sel.start).split('\n').length - 1
-    const endOffset = sel.end > sel.start && current.text[sel.end - 1] === '\n' ? sel.end - 1 : sel.end
-    const last = current.text.slice(0, endOffset).split('\n').length - 1
-    const formats = current.formats.map((value, index) => index >= first && index <= last ? kind : value)
-    apply({ ...current, formats }, sel, true, true)
-  }
-
   function exportDraft(type: 'json' | 'txt') {
     const current = draftRef.current
     const name = (current.name.trim() || '未命名文稿').replace(/[\\/:*?"<>|]/g, '_')
@@ -245,7 +233,7 @@ export default function App() {
       else {
         const text = content.replace(/\r\n?/g, '\n')
         if (text.length > MAX_LENGTH) throw new Error('文稿过长，请分成每份不超过 20,000 个文本编码单元的文件。')
-        next = { ...emptyDraft(), settings: draftRef.current.settings, name: file.name.replace(/\.[^.]+$/, ''), text, formats: text.split('\n').map(() => 'body') }
+        next = { ...emptyDraft(), settings: draftRef.current.settings, name: file.name.replace(/\.[^.]+$/, ''), text }
       }
       apply(next, START, true, true)
       setToast('已导入文稿。可以通过撤销返回导入前的内容。')
@@ -290,7 +278,7 @@ export default function App() {
     el.setRangeText(target.padding + text, target.offset, target.offset, 'end')
     const next = readSelection(el)
     remember(before)
-    apply(withText(draftRef.current, el.value, next.end), next, false)
+    apply({ ...draftRef.current, text: el.value }, next, false)
     mergeNextEdit.current = !text
   }
 
@@ -364,7 +352,6 @@ export default function App() {
 
     <div className="editor-toolbar">
       <div className="document-name-wrap"><button className="icon-button desktop-sidebar-toggle" aria-label={sidebarCollapsed ? '展开设置' : '收起设置'} onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>{sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</button><button className="icon-button mobile-settings" aria-label="纸张设置" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(!sidebarOpen)}><Settings2 size={19} /></button><input className="document-name" aria-label="文稿名称" value={draft.name} maxLength={100} onChange={event => apply({ ...draftRef.current, name: event.target.value }, selectionRef.current, false)} /></div>
-      <div className="format-tools" role="group" aria-label="当前段落格式">{(['body', 'title', 'salutation', 'signature'] as BlockKind[]).map(kind => <button key={kind} className={activeKind === kind ? 'active' : ''} aria-pressed={activeKind === kind} onMouseDown={e => e.preventDefault()} onClick={() => setBlock(kind)}>{BLOCK_LABELS[kind]}</button>)}</div>
       <div className="toolbar-right"><div className="history-tools"><button className="icon-button" aria-label="撤销" title="撤销 ⌘/Ctrl Z" disabled={!undo.current.length || composing} onMouseDown={e => e.preventDefault()} onClick={() => travelHistory('undo')}><Undo2 size={17} /></button><button className="icon-button" aria-label="重做" title="重做 ⌘/Ctrl Shift Z" disabled={!redo.current.length || composing} onMouseDown={e => e.preventDefault()} onClick={() => travelHistory('redo')}><Redo2 size={17} /></button></div><div className="zoom-tools"><button className="icon-button" aria-label="缩小" onClick={() => setZoom(Math.max(35, Math.round(scale * 100 / 5) * 5 - 10))}><Minus size={14} /></button><select aria-label="显示缩放" value={zoom} onChange={event => setZoom(event.target.value === 'fit' ? 'fit' : Number(event.target.value))}><option value="fit">适应宽度</option>{Array.from(new Set([35, 50, 65, 75, 85, 100, 115, 125, ...(typeof zoom === 'number' ? [zoom] : [])])).sort((a, b) => a - b).map(n => <option key={n} value={n}>{n}%</option>)}</select><button className="icon-button" aria-label="放大" onClick={() => setZoom(Math.min(125, Math.round(scale * 100 / 5) * 5 + 10))}><Plus size={14} /></button></div></div>
     </div>
 
@@ -392,7 +379,7 @@ export default function App() {
                 <div className="paper-head"><span>文 稿</span><span>MANUSCRIPT</span></div>
                 <div className="paper-grid" data-page={pageIndex} ref={el => { grids.current[pageIndex] = el }} style={{ left: gridLeft, top: gridTop, width: gridWidth, height: gridHeight, '--cell-size': `${settings.cellSize}px`, '--row-gap': `${settings.rowGap}px` } as CSSProperties} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={() => { dragAnchor.current = null }} onPointerCancel={() => { dragAnchor.current = null }}>
                   <div className="grid-lines" aria-hidden="true">{Array.from({ length: settings.rows }, (_, row) => <div className="grid-row" key={row} style={{ height: settings.cellSize, marginBottom: row === settings.rows - 1 ? 0 : settings.rowGap, gridTemplateColumns: `repeat(${settings.columns}, 1fr)` }}>{Array.from({ length: settings.columns }, (_, col) => <span key={col} />)}</div>)}</div>
-                  <div className="glyph-layer" aria-hidden="true">{glyphs.map(glyph => <span key={`${glyph.start}-${glyph.end}`} className={`glyph ${glyph.hanging ? 'hanging' : ''} ${glyph.kind === 'title' ? 'title-glyph' : ''} ${!composing && glyph.end > selection.start && glyph.start < selection.end && focused ? 'selected-glyph' : ''}`} data-start={glyph.start} style={{ left: glyph.column * settings.cellSize, top: glyph.row * (settings.cellSize + settings.rowGap), width: glyph.hanging ? settings.cellSize * 0.5 : glyph.span * settings.cellSize, height: settings.cellSize, fontSize: settings.cellSize * (glyph.text.length === 2 && /^[A-Za-z0-9]+$/.test(glyph.text) ? 0.62 : 0.76) }}>{glyph.text}</span>)}</div>
+                  <div className="glyph-layer" aria-hidden="true">{glyphs.map(glyph => <span key={`${glyph.start}-${glyph.end}`} className={`glyph ${glyph.hanging ? 'hanging' : ''} ${!composing && glyph.end > selection.start && glyph.start < selection.end && focused ? 'selected-glyph' : ''}`} data-start={glyph.start} style={{ left: glyph.column * settings.cellSize, top: glyph.row * (settings.cellSize + settings.rowGap), width: glyph.hanging ? settings.cellSize * 0.5 : glyph.span * settings.cellSize, height: settings.cellSize, fontSize: settings.cellSize * (glyph.text.length === 2 && /^[A-Za-z0-9]+$/.test(glyph.text) ? 0.62 : 0.76) }}>{glyph.text}</span>)}</div>
                   {pageIndex === caret.page && <span className={`paper-caret ${focused && !composing && selection.start === selection.end ? 'visible' : ''}`} ref={caretElement} aria-hidden="true" style={{ left: Math.min(caret.column, settings.columns - 0.05) * settings.cellSize, top: caret.row * (settings.cellSize + settings.rowGap) + settings.cellSize * 0.12, height: settings.cellSize * 0.76 }} />}
                   {preedit?.text && pageIndex === caret.page && <span className="preedit" aria-hidden="true" style={{ left: Math.min(caret.column, settings.columns) * settings.cellSize, top: caret.row * (settings.cellSize + settings.rowGap), height: settings.cellSize, lineHeight: `${settings.cellSize}px`, fontSize: settings.cellSize * 0.56 }}>{preedit.text}</span>}
                   {!shownDraft.text && !composing && pageIndex === 0 && <span className="empty-hint" style={{ top: settings.cellSize + settings.rowGap + 12 }}>点击任意位置，写下第一句话。</span>}
@@ -402,13 +389,12 @@ export default function App() {
             </div>
           </div>)}
         </div>
-        <div className="workspace-bottom">文字仅保存在此浏览器中。重要文稿请定期导出备份。</div>
       </div>
     </main>
 
-    <footer className="status-bar"><div><span><b>{layout.characters.toLocaleString()}</b> 字<span className="stat-detail">（含标点与空格）</span></span><i /><span>共 <b>{layout.pages}</b> 页</span></div><div><span>第 {caret.page + 1} 页 · 第 {caret.row + 1} 行 · 第 {Math.min(settings.columns, Math.floor(caret.column) + 1)} 格</span><i /><details className="help-menu"><summary aria-label="使用说明"><HelpCircle size={15} /><span>使用说明</span></summary><div className="popover help-popover"><strong>像在纸上写字一样</strong><p>点击稿纸定位光标，直接输入或粘贴。按 Enter 另起一段，新段落默认使用正文格式。</p><p>点击段尾或下方的空白格子也能书写，中间空出的格子会自动补上全角空格。段首需要空格时，请自行输入。</p><p>选中一段或多段后，可切换标题、称呼与落款。用方向键移动光标，按 Shift 配合方向键选择文字。</p><p>⌘ / Ctrl + Z 撤销<br />⌘ / Ctrl + Shift + Z 重做<br />⌘ / Ctrl + S 导出备份</p><p>打印时选择 A4、100% 缩放，关闭浏览器页眉页脚。格线属于页面内容，无须开启背景图形。</p></div></details></div></footer>
+    <footer className="status-bar"><div><span><b>{layout.characters.toLocaleString()}</b> 字<span className="stat-detail">（含标点与空格）</span></span><i /><span>共 <b>{layout.pages}</b> 页</span></div><div><span>第 {caret.page + 1} 页 · 第 {caret.row + 1} 行 · 第 {Math.min(settings.columns, Math.floor(caret.column) + 1)} 格</span><i /><details className="help-menu"><summary aria-label="使用说明"><HelpCircle size={15} /><span>使用说明</span></summary><div className="popover help-popover"><strong>像在纸上写字一样</strong><p>点击稿纸定位光标，直接输入或粘贴。按 Enter 另起一段。</p><p>点击段尾或下方的空白格子也能书写，中间空出的格子会自动补上全角空格。段首需要空格时，请自行输入。</p><p>用方向键移动光标，按 Shift 配合方向键选择文字。</p><p>⌘ / Ctrl + Z 撤销<br />⌘ / Ctrl + Shift + Z 重做<br />⌘ / Ctrl + S 导出备份</p><p>打印时选择 A4、100% 缩放，关闭浏览器页眉页脚。格线属于页面内容，无须开启背景图形。</p></div></details></div></footer>
 
-    <p id="editor-instructions" className="sr-only">在稿纸上输入正文。Enter 开始新段落。使用顶部按钮设置段落格式，使用方向键移动，Shift 加方向键选择。全文不含换行最多 20,000 个文本编码单元。</p>
+    <p id="editor-instructions" className="sr-only">在稿纸上输入正文。Enter 开始新段落。使用方向键移动，Shift 加方向键选择。全文不含换行最多 20,000 个文本编码单元。</p>
     <textarea ref={textarea} className="native-input" aria-label="稿纸正文" aria-describedby="editor-instructions" spellCheck={false} autoCapitalize="off" autoCorrect="off" value={draft.text} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onSelect={event => {
       if (pendingSelection.current || composition.current) return
       const next = readSelection(event.currentTarget)
@@ -421,7 +407,7 @@ export default function App() {
       if (text.length > MAX_LENGTH) { event.currentTarget.value = draftRef.current.text; setToast('文稿已达到第一版的长度上限，请拆分文稿。'); return }
       const nextSelection = readSelection(event.currentTarget)
       scrollToCaret.current = true
-      apply(withText(draftRef.current, text, nextSelection.end), nextSelection, !composition.current && !takeMergeNextEdit())
+      apply({ ...draftRef.current, text }, nextSelection, !composition.current && !takeMergeNextEdit())
     }} onPaste={() => {
       if (virtualRef.current) materializeVirtualCaret()
     }} onCompositionStart={event => {
@@ -434,7 +420,7 @@ export default function App() {
       selectionRef.current = selectionNow
       composition.current = { draft: current, selection: selectionNow }
       // Composing replaces any selection, so the paper shows the text without it.
-      const base = start === end ? current : withText(current, current.text.slice(0, start) + current.text.slice(end), start)
+      const base = start === end ? current : { ...current, text: current.text.slice(0, start) + current.text.slice(end) }
       setPreedit({ base, start, text: '' })
     }} onCompositionUpdate={event => {
       const text = event.data
@@ -450,7 +436,7 @@ export default function App() {
       }
       if (before && before.draft.text !== text && !takeMergeNextEdit()) remember(before)
       const nextSelection = readSelection(event.currentTarget)
-      apply(withText(draftRef.current, text, nextSelection.end), nextSelection, false)
+      apply({ ...draftRef.current, text }, nextSelection, false)
     }} onKeyDown={event => {
       if (virtualRef.current && !composition.current) {
         // Nothing to delete in a blank cell; text input is handled by beforeinput.

@@ -9,10 +9,8 @@ test.describe('local saving', () => {
     await expect.poll(() => paperText(page)).toContain('亲爱的自己：')
   })
 
-  test('text, paragraph formats and settings survive a reload', async ({ page }) => {
+  test('text and settings survive a reload', async ({ page }) => {
     await openWith(page, makeDraft('题目\n正文'))
-    await setCaret(page, 0)
-    await page.getByRole('button', { name: '标题' }).click()
     await page.getByLabel('行末标点处理').selectOption('strict')
     await setCaret(page, 5)
     await page.keyboard.type('内容')
@@ -21,8 +19,6 @@ test.describe('local saving', () => {
     await page.reload()
     await expect.poll(() => paperText(page)).toBe('题目正文内容')
     await expect(page.getByLabel('行末标点处理')).toHaveValue('strict')
-    await setCaret(page, 1)
-    await expect(page.getByRole('button', { name: '标题' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   test('the same draft lays out identically before and after reload', async ({ page }) => {
@@ -63,7 +59,7 @@ test.describe('local saving', () => {
   })
 
   test('a JSON backup can be exported and imported again', async ({ page }) => {
-    await openWith(page, makeDraft('备份内容\n张三', ['body', 'signature'], { columns: 16 }))
+    await openWith(page, makeDraft('备份内容\n张三', { columns: 16 }))
     await page.locator('.export-menu summary').click()
     const downloadEvent = page.waitForEvent('download')
     await page.getByRole('button', { name: /稿纸备份/ }).click()
