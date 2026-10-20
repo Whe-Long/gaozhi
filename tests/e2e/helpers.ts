@@ -40,6 +40,16 @@ export async function paperText(page: Page): Promise<string> {
   return items.sort((a, b) => a.start - b.start).map(g => g.text).join('')
 }
 
+/** Click the centre of a cell, converting grid coordinates to the zoomed paper. */
+export async function clickCell(page: Page, row: number, column: number, pageIndex = 0) {
+  const grid = page.locator(`.paper-grid[data-page="${pageIndex}"]`)
+  const { width } = (await grid.boundingBox())!
+  const { columns, cellSize, rowGap } = await page.evaluate(key =>
+    JSON.parse(localStorage.getItem(key) ?? 'null')?.settings ?? { columns: 20, cellSize: 30, rowGap: 12 }, STORAGE_KEY)
+  const scale = width / (columns * cellSize)
+  await grid.click({ position: { x: (column + 0.5) * cellSize * scale, y: (row * (cellSize + rowGap) + cellSize / 2) * scale } })
+}
+
 export async function setCaret(page: Page, start: number, end = start) {
   const input = editor(page)
   await input.focus()

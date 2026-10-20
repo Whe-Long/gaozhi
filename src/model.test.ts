@@ -14,17 +14,20 @@ describe('normalizeSettings', () => {
   })
 
   it('clamps and rounds numeric fields', () => {
-    const s = normalizeSettings({ columns: 99, rows: 3, rowGap: 7.6, indent: -1 })
+    const s = normalizeSettings({ columns: 99, rows: 3, rowGap: 7.6 })
     expect(s.columns).toBe(24)
     expect(s.rows).toBe(10)
     expect(s.rowGap).toBe(8)
-    expect(s.indent).toBe(0)
   })
 
   it('keeps the cell size within what fits on an A4 page', () => {
     const s = normalizeSettings({ columns: 24, rows: 24, rowGap: 16, cellSize: 36 })
     expect(s.cellSize).toBe(maxCellSize(s))
     expect(s.cellSize).toBeLessThan(36)
+  })
+
+  it('drops the retired first-line indent setting from older drafts', () => {
+    expect(normalizeSettings({ ...DEFAULT_SETTINGS, indent: 2 })).not.toHaveProperty('indent')
   })
 
   it('accepts every supported option value', () => {

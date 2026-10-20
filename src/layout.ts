@@ -4,9 +4,17 @@ export interface Position { page: number; row: number; column: number }
 export interface Glyph extends Position {
   text: string; start: number; end: number; span: number; hanging: boolean; kind: BlockKind
 }
+/** Where a paragraph's text stops: its last visual line and the caret after its last glyph. */
+export interface ParagraphEnd { line: number; offset: number; column: number; kind: BlockKind }
 export interface Layout {
-  glyphs: Glyph[]; carets: Position[]; pages: number; characters: number
+  glyphs: Glyph[]; carets: Position[]; ends: ParagraphEnd[]; pages: number; characters: number
 }
+/** A click resolved to a source offset, plus the text needed to reach a blank cell. */
+export interface HitTarget { offset: number; padding: string; cell: Position | null }
+/** Full-width space: one blank cell on the paper. */
+export const BLANK = '\u3000'
+/** Formats whose trailing cells can be filled; aligned formats compute their own margins. */
+const PADDABLE = new Set<BlockKind>(['body', 'salutation'])
 interface Token { text: string; start: number; end: number; span: number }
 const CLOSE = new Set(Array.from('，。、；：？！）》」』】〕〉〗〙〛”’％%…'))
 const OPEN = new Set(Array.from('（《「『【〔〈〖〘〚“‘'))
@@ -41,6 +49,7 @@ export function layoutDocument(draft: Draft): Layout {
   const { columns, rows } = settings
   const glyphs: Glyph[] = []
   const carets: Position[] = new Array(draft.text.length + 1)
+  const ends: ParagraphEnd[] = []
   const position = (line: number, column: number): Position => ({ page: Math.floor(line / rows), row: line % rows, column })
   let line = 0
   let offset = 0
@@ -48,7 +57,7 @@ export function layoutDocument(draft: Draft): Layout {
 
   blocks.forEach((text, blockIndex) => {
     const kind = draft.formats[blockIndex] ?? 'body'
-    let col = kind === 'body' && !/^[\s\u3000]/u.test(text) ? settings.indent : 0
+    let col = 0
     const firstGlyph = glyphs.length
     const firstLine = line
     const tokens = tokenize(text, offset, settings)
@@ -100,13 +109,15 @@ export function layoutDocument(draft: Draft): Layout {
         }
       }
     }
+    const end = offset + text.length
+    ends.push({ line, offset: end, column: carets[end].column, kind })
     if (blockIndex < blocks.length - 1) {
       offset += text.length + 1
       line++
     }
   })
   return {
-    glyphs, carets, pages: Math.max(1, Math.floor(line / rows) + 1),
+    glyphs, carets, ends, pages: Math.max(1, Math.floor(line / rows) + 1),
     characters: graphemes(draft.text).filter(g => !/[\r\n]/.test(g.text)).length,
   }
 }
@@ -122,4 +133,27 @@ export function hitTest(layout: Layout, page: number, row: number, column: numbe
     if (d < distance || (d === distance && i > best)) { best = i; distance = d }
   })
   return best
+}
+
+/**
+ * Resolve a click to a caret. Blank cells after a paragraph's last line, and
+ * blank rows below the text, return the full-width spaces and line breaks that
+ * typing there must insert first. Other clicks snap to the nearest caret.
+ */
+export function locate(layout: Layout, page: number, row: number, column: number,
+  settings: Pick<Settings, 'rows' | 'columns'>): HitTarget {
+  const { rows, columns } = settings
+  const line = page * rows + row
+  const cellColumn = Math.max(0, Math.min(columns - 1, Math.floor(column)))
+  const cell: Position = { page, row, column: cellColumn }
+  const last = layout.ends[layout.ends.length - 1]
+  if (last && line > last.line) {
+    return { offset: last.offset, padding: '\n'.repeat(line - last.line) + BLANK.repeat(cellColumn), cell }
+  }
+  const end = layout.ends.find(p => p.line === line)
+  const gap = end ? cellColumn - Math.ceil(end.column) : 0
+  if (end && PADDABLE.has(end.kind) && gap > 0) {
+    return { offset: end.offset, padding: BLANK.repeat(gap), cell }
+  }
+  return { offset: hitTest(layout, page, row, column, rows), padding: '', cell: null }
 }

@@ -1,12 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowDownToLine, ArrowUpFromLine, Check, ChevronDown, FilePlus2, HelpCircle, Minus, PanelLeftClose, PanelLeftOpen, Plus, Printer, Redo2, RotateCcw, Settings2, Undo2, X } from 'lucide-react'
-import { hitTest, layoutDocument, type Layout } from './layout'
+import { hitTest, layoutDocument, locate, type HitTarget, type Layout, type Position } from './layout'
 import { BLOCK_LABELS, DEFAULT_SETTINGS, emptyDraft, MAX_LENGTH, maxCellSize, normalizeSettings, PAGE_HEIGHT, PAGE_WIDTH, sampleDraft, STORAGE_KEY, validateDraft, withText, type BlockKind, type Draft, type Settings } from './model'
 import { loadDraft, readBackup, type DraftStorage } from './storage'
 
 interface Selection { start: number; end: number; direction: 'forward' | 'backward' | 'none' }
 interface Snapshot { draft: Draft; selection: Selection }
 const START: Selection = { start: 0, end: 0, direction: 'none' }
+/** A caret parked in a blank cell; its padding is inserted only when text is entered. */
+type VirtualCaret = HitTarget & { cell: Position }
+const NAVIGATION_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown', 'Tab', 'Escape'])
 const focusOffset = (s: Selection) => s.direction === 'backward' ? s.start : s.end
 const readSelection = (el: HTMLTextAreaElement): Selection => ({ start: el.selectionStart, end: el.selectionEnd, direction: el.selectionDirection })
 
@@ -53,13 +56,17 @@ export default function App() {
   const pendingSelection = useRef<Selection | null>(null)
   const scrollToCaret = useRef(false)
   const dragAnchor = useRef<number | null>(null)
+  const [virtualCaret, setVirtualCaretState] = useState<VirtualCaret | null>(null)
+  const virtualRef = useRef<VirtualCaret | null>(null)
+  // Set after padding is inserted so the text that follows joins its undo step.
+  const mergeNextEdit = useRef(false)
   const layout = useMemo(() => layoutDocument(draft), [draft])
   const layoutRef = useRef<Layout>(layout)
   layoutRef.current = layout
   const scale = zoom === 'fit' ? fitScale : zoom / 100
   const { settings } = draft
   const activeOffset = Math.min(focusOffset(selection), draft.text.length)
-  const caret = layout.carets[activeOffset] ?? { page: 0, row: 0, column: settings.indent }
+  const caret = virtualCaret?.cell ?? layout.carets[activeOffset] ?? { page: 0, row: 0, column: 0 }
   const activeBlock = draft.text.slice(0, activeOffset).split('\n').length - 1
   const activeKind = draft.formats[activeBlock] ?? 'body'
   const gridWidth = settings.columns * settings.cellSize
@@ -89,7 +96,19 @@ export default function App() {
     refreshHistory(n => n + 1)
   }
 
+  function setVirtualCaret(next: VirtualCaret | null) {
+    virtualRef.current = next
+    setVirtualCaretState(next)
+  }
+
+  function takeMergeNextEdit() {
+    const merge = mergeNextEdit.current
+    mergeNextEdit.current = false
+    return merge
+  }
+
   function apply(next: Draft, nextSelection = selectionRef.current, record = true, focus = false) {
+    if (next !== draftRef.current) setVirtualCaret(null)
     if (record && next !== draftRef.current) remember({ draft: draftRef.current, selection: selectionRef.current })
     const safe = { ...nextSelection, start: Math.min(nextSelection.start, next.text.length), end: Math.min(nextSelection.end, next.text.length) }
     draftRef.current = next
@@ -130,7 +149,7 @@ export default function App() {
       scrollToCaret.current = false
     }
     syncNativeInput()
-  }, [draft, selection, scale])
+  }, [draft, selection, scale, virtualCaret])
 
   useEffect(() => {
     const observer = new ResizeObserver(() => {
@@ -231,7 +250,7 @@ export default function App() {
     apply(example ? sampleDraft() : { ...emptyDraft(), settings: draftRef.current.settings }, START, true, true)
   }
 
-  function indexAtPoint(clientX: number, clientY: number) {
+  function targetAtPoint(clientX: number, clientY: number): HitTarget {
     let bestPage = 0
     let distance = Infinity
     grids.current.slice(0, layoutRef.current.pages).forEach((el, index) => {
@@ -241,13 +260,56 @@ export default function App() {
       if (d < distance) { bestPage = index; distance = d }
     })
     const rect = grids.current[bestPage]?.getBoundingClientRect()
-    if (!rect) return 0
+    if (!rect) return { offset: 0, padding: '', cell: null }
     const s = draftRef.current.settings
     const actualScale = rect.width / (s.columns * s.cellSize)
     const column = Math.max(0, Math.min(s.columns, (clientX - rect.left) / (s.cellSize * actualScale)))
     const row = Math.max(0, Math.min(s.rows - 1, Math.floor((clientY - rect.top) / ((s.cellSize + s.rowGap) * actualScale))))
-    return hitTest(layoutRef.current, bestPage, row, column, s.rows)
+    return locate(layoutRef.current, bestPage, row, column, s)
   }
+
+  /**
+   * Insert a virtual caret's padding so the text being entered lands in its
+   * cell. Without `text`, the browser's own insertion follows and joins this
+   * undo step.
+   */
+  function materializeVirtualCaret(text = '') {
+    const target = virtualRef.current
+    const el = textarea.current
+    if (!target || !el) return
+    setVirtualCaret(null)
+    const before = { draft: draftRef.current, selection: selectionRef.current }
+    el.setRangeText(target.padding + text, target.offset, target.offset, 'end')
+    const next = readSelection(el)
+    remember(before)
+    apply(withText(draftRef.current, el.value, next.end), next, false)
+    mergeNextEdit.current = !text
+  }
+
+  // Typing, Enter, dictation and the emoji picker all pass through beforeinput;
+  // paste and IME composition pad in their own handlers.
+  const beforeInput = useRef<(event: InputEvent) => void>(() => undefined)
+  beforeInput.current = event => {
+    const target = virtualRef.current
+    if (!target || composition.current || !event.cancelable) return
+    const text = event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph' ? '\n'
+      : event.inputType === 'insertText' || event.inputType === 'insertReplacementText' ? event.data ?? event.dataTransfer?.getData('text/plain') ?? ''
+      : ''
+    if (!text) return
+    event.preventDefault()
+    if (draftRef.current.text.length + target.padding.length + text.length > MAX_LENGTH) {
+      setToast('文稿已达到第一版的长度上限，请拆分文稿。')
+      return
+    }
+    materializeVirtualCaret(text)
+  }
+  useEffect(() => {
+    const el = textarea.current
+    if (!el) return
+    const listener = (event: InputEvent) => beforeInput.current(event)
+    el.addEventListener('beforeinput', listener)
+    return () => el.removeEventListener('beforeinput', listener)
+  }, [])
 
   function rangeTo(anchor: number, next: number): Selection {
     return { start: Math.min(anchor, next), end: Math.max(anchor, next), direction: next < anchor ? 'backward' : 'forward' }
@@ -256,17 +318,21 @@ export default function App() {
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0 || composition.current) return
     event.preventDefault()
-    const index = indexAtPoint(event.clientX, event.clientY)
+    const target = targetAtPoint(event.clientX, event.clientY)
     const existing = selectionRef.current
-    const anchor = event.shiftKey ? (existing.direction === 'backward' ? existing.end : existing.start) : index
+    const anchor = event.shiftKey ? (existing.direction === 'backward' ? existing.end : existing.start) : target.offset
     dragAnchor.current = anchor
     event.currentTarget.setPointerCapture(event.pointerId)
-    select(rangeTo(anchor, index), false)
+    mergeNextEdit.current = false
+    select(rangeTo(anchor, target.offset), false)
+    setVirtualCaret(!event.shiftKey && target.cell ? { ...target, cell: target.cell } : null)
   }
 
   function pointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     if (dragAnchor.current === null) return
-    select(rangeTo(dragAnchor.current, indexAtPoint(event.clientX, event.clientY)), false)
+    const target = targetAtPoint(event.clientX, event.clientY)
+    select(rangeTo(dragAnchor.current, target.offset), false)
+    setVirtualCaret(target.offset === dragAnchor.current && target.cell ? { ...target, cell: target.cell } : null)
     const rect = workspace.current?.getBoundingClientRect()
     if (rect && workspace.current) {
       if (event.clientY > rect.bottom - 32) workspace.current.scrollTop += 18
@@ -302,7 +368,7 @@ export default function App() {
         <div className="field-row"><label className="field"><span>每行格数</span><input aria-label="每行格数" type="number" min={10} max={24} value={settings.columns} onChange={event => changeSettings({ columns: Number(event.target.value) })} /></label><label className="field"><span>每页行数</span><input aria-label="每页行数" type="number" min={10} max={24} value={settings.rows} onChange={event => changeSettings({ rows: Number(event.target.value) })} /></label></div>
         <label className="field range-field"><span>格子大小 <output>{(settings.cellSize * 25.4 / 96).toFixed(1)} mm</output></span><input aria-label="格子大小" type="range" min={18} max={maxCellSize(settings)} value={settings.cellSize} onChange={event => changeSettings({ cellSize: Number(event.target.value) })} /></label>
         <label className="field range-field"><span>行间留白 <output>{(settings.rowGap * 25.4 / 96).toFixed(1)} mm</output></span><input aria-label="行间留白" type="range" min={4} max={16} value={settings.rowGap} onChange={event => changeSettings({ rowGap: Number(event.target.value) })} /></label>
-        <div className="settings-section"><h2>书写规则</h2><label className="field"><span>正文首行缩进</span><select aria-label="正文首行缩进" value={settings.indent} onChange={event => changeSettings({ indent: Number(event.target.value) })}>{[0, 1, 2, 3, 4].map(n => <option key={n} value={n}>{n === 0 ? '不缩进' : `空 ${n} 格`}</option>)}</select></label><label className="field"><span>行末标点处理</span><select aria-label="行末标点处理" value={settings.punctuation} onChange={event => changeSettings({ punctuation: event.target.value as Settings['punctuation'] })}><option value="hang">行末悬挂</option><option value="strict">严格占格</option></select><small>{settings.punctuation === 'hang' ? '行满时，点号或后引号可写在格外。' : '将前一字一并移行，避免标点落在行首。'}</small></label><label className="toggle-field"><span>数字、英文两字一格<small>连续半角字母和数字成对排入</small></span><input aria-label="数字、英文两字一格" type="checkbox" checked={settings.pairAscii} onChange={event => changeSettings({ pairAscii: event.target.checked })} /><span className="switch" /></label></div>
+        <div className="settings-section"><h2>书写规则</h2><label className="field"><span>行末标点处理</span><select aria-label="行末标点处理" value={settings.punctuation} onChange={event => changeSettings({ punctuation: event.target.value as Settings['punctuation'] })}><option value="hang">行末悬挂</option><option value="strict">严格占格</option></select><small>{settings.punctuation === 'hang' ? '行满时，点号或后引号可写在格外。' : '将前一字一并移行，避免标点落在行首。'}</small></label><label className="toggle-field"><span>数字、英文两字一格<small>连续半角字母和数字成对排入</small></span><input aria-label="数字、英文两字一格" type="checkbox" checked={settings.pairAscii} onChange={event => changeSettings({ pairAscii: event.target.checked })} /><span className="switch" /></label></div>
         <div className="settings-section"><h2>纸面样式</h2><label className="field"><span>预览字体</span><select aria-label="预览字体" value={settings.font} onChange={event => changeSettings({ font: event.target.value as Settings['font'] })}><option value="kai">楷体 · 便于誊抄</option><option value="song">宋体 · 清晰规整</option></select></label><div className="field color-field"><span>格线颜色</span><div role="group" aria-label="格线颜色">{[['#bb786b', '朱砂'], ['#628a77', '松绿'], ['#858581', '石灰']].map(([color, label]) => <button key={color} className={`color-swatch ${settings.gridColor === color ? 'selected' : ''}`} style={{ '--swatch': color } as CSSProperties} aria-label={label} aria-pressed={settings.gridColor === color} onClick={() => changeSettings({ gridColor: color })}>{settings.gridColor === color && <Check size={13} />}</button>)}</div></div></div>
         <button className="reset-button" onClick={() => apply({ ...draftRef.current, settings: { ...DEFAULT_SETTINGS } })}><RotateCcw size={14} />恢复默认设置</button>
         <div className="sidebar-note"><span className="note-mark">纸上有序，落笔从容。</span><p>先在这里把文字排好，<br />再安心地写到纸上。</p><button onClick={() => newDocument(true)}>载入示例文稿 <span>↗</span></button></div>
@@ -331,7 +397,7 @@ export default function App() {
       </div>
     </main>
 
-    <footer className="status-bar"><div><span><b>{layout.characters.toLocaleString()}</b> 字<span className="stat-detail">（含标点与空格）</span></span><i /><span>共 <b>{layout.pages}</b> 页</span></div><div><span>第 {caret.page + 1} 页 · 第 {caret.row + 1} 行 · 第 {Math.min(settings.columns, Math.floor(caret.column) + 1)} 格</span><i /><details className="help-menu"><summary aria-label="使用说明"><HelpCircle size={15} /><span>使用说明</span></summary><div className="popover help-popover"><strong>像在纸上写字一样</strong><p>点击稿纸定位光标，直接输入或粘贴。按 Enter 另起一段，新段落默认使用正文格式。</p><p>选中一段或多段后，可切换标题、称呼与落款。用方向键移动光标，按 Shift 配合方向键选择文字。</p><p>⌘ / Ctrl + Z 撤销<br />⌘ / Ctrl + Shift + Z 重做<br />⌘ / Ctrl + S 导出备份</p><p>打印时选择 A4、100% 缩放，关闭浏览器页眉页脚。格线属于页面内容，无须开启背景图形。</p></div></details></div></footer>
+    <footer className="status-bar"><div><span><b>{layout.characters.toLocaleString()}</b> 字<span className="stat-detail">（含标点与空格）</span></span><i /><span>共 <b>{layout.pages}</b> 页</span></div><div><span>第 {caret.page + 1} 页 · 第 {caret.row + 1} 行 · 第 {Math.min(settings.columns, Math.floor(caret.column) + 1)} 格</span><i /><details className="help-menu"><summary aria-label="使用说明"><HelpCircle size={15} /><span>使用说明</span></summary><div className="popover help-popover"><strong>像在纸上写字一样</strong><p>点击稿纸定位光标，直接输入或粘贴。按 Enter 另起一段，新段落默认使用正文格式。</p><p>点击段尾或下方的空白格子也能书写，中间空出的格子会自动补上全角空格。段首需要空格时，请自行输入。</p><p>选中一段或多段后，可切换标题、称呼与落款。用方向键移动光标，按 Shift 配合方向键选择文字。</p><p>⌘ / Ctrl + Z 撤销<br />⌘ / Ctrl + Shift + Z 重做<br />⌘ / Ctrl + S 导出备份</p><p>打印时选择 A4、100% 缩放，关闭浏览器页眉页脚。格线属于页面内容，无须开启背景图形。</p></div></details></div></footer>
 
     <p id="editor-instructions" className="sr-only">在稿纸上输入正文。Enter 开始新段落。使用顶部按钮设置段落格式，使用方向键移动，Shift 加方向键选择。全文不含换行最多 20,000 个文本编码单元。</p>
     <textarea ref={textarea} className="native-input" aria-label="稿纸正文" aria-describedby="editor-instructions" spellCheck={false} autoCapitalize="off" autoCorrect="off" value={draft.text} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onSelect={event => {
@@ -339,14 +405,19 @@ export default function App() {
       const next = readSelection(event.currentTarget)
       if (next.start !== selectionRef.current.start || next.end !== selectionRef.current.end || next.direction !== selectionRef.current.direction) {
         selectionRef.current = next; setSelection(next)
+        setVirtualCaret(null); mergeNextEdit.current = false
       }
     }} onChange={event => {
       const text = event.currentTarget.value
       if (text.length > MAX_LENGTH) { event.currentTarget.value = draftRef.current.text; setToast('文稿已达到第一版的长度上限，请拆分文稿。'); return }
       const nextSelection = readSelection(event.currentTarget)
       scrollToCaret.current = true
-      apply(withText(draftRef.current, text, nextSelection.end), nextSelection, !composition.current)
+      apply(withText(draftRef.current, text, nextSelection.end), nextSelection, !composition.current && !takeMergeNextEdit())
+    }} onPaste={() => {
+      if (virtualRef.current) materializeVirtualCaret()
     }} onCompositionStart={() => {
+      // Composition input cannot be cancelled, so pad before it begins.
+      if (virtualRef.current) materializeVirtualCaret()
       composition.current = { draft: draftRef.current, selection: selectionRef.current }
       setComposing(true)
     }} onCompositionEnd={event => {
@@ -358,10 +429,15 @@ export default function App() {
         setToast('文稿已达到第一版的长度上限，请拆分文稿。')
         return
       }
-      if (before && before.draft.text !== text) remember(before)
+      if (before && before.draft.text !== text && !takeMergeNextEdit()) remember(before)
       const nextSelection = readSelection(event.currentTarget)
       apply(withText(draftRef.current, text, nextSelection.end), nextSelection, false)
     }} onKeyDown={event => {
+      if (virtualRef.current && !composition.current) {
+        // Nothing to delete in a blank cell; text input is handled by beforeinput.
+        if (event.key === 'Backspace' || event.key === 'Delete') { event.preventDefault(); setVirtualCaret(null); return }
+        else if (NAVIGATION_KEYS.has(event.key)) setVirtualCaret(null)
+      }
       if (composition.current || event.nativeEvent.isComposing) return
       const mod = event.metaKey || event.ctrlKey
       if (mod && event.key.toLowerCase() === 'z') { event.preventDefault(); travelHistory(event.shiftKey ? 'redo' : 'undo'); return }

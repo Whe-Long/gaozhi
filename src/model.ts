@@ -6,7 +6,6 @@ export interface Settings {
   rows: number
   cellSize: number
   rowGap: number
-  indent: number
   punctuation: PunctuationMode
   pairAscii: boolean
   gridColor: string
@@ -26,7 +25,7 @@ export const MAX_LENGTH = 20_000
 export const PAGE_WIDTH = 794
 export const PAGE_HEIGHT = 1123
 export const DEFAULT_SETTINGS: Settings = {
-  columns: 20, rows: 20, cellSize: 30, rowGap: 12, indent: 2,
+  columns: 20, rows: 20, cellSize: 30, rowGap: 12,
   punctuation: 'hang', pairAscii: true, gridColor: '#bb786b', font: 'kai',
 }
 export const BLOCK_LABELS: Record<BlockKind, string> = {
@@ -40,7 +39,7 @@ export function emptyDraft(): Draft {
 export function sampleDraft(): Draft {
   return {
     ...emptyDraft(), name: '写给未来的自己',
-    text: '写给未来的自己\n亲爱的自己：\n写下这些文字时，窗外的树影正在轻轻摇晃。我想把今天的一点心情，认真地留在纸上。\n日子不必匆忙，脚步可以坚定。愿你始终对世界保有好奇，在平凡的生活里，也能发现值得珍藏的光。\n当你再次读到这封信，希望仍记得出发时的心情：认真学习，真诚待人，把喜欢的事情慢慢做好。\n愿未来的你，眼中有光，心中有爱。\n一个晴朗的午后\n2026年10月20日',
+    text: '写给未来的自己\n亲爱的自己：\n　　写下这些文字时，窗外的树影正在轻轻摇晃。我想把今天的一点心情，认真地留在纸上。\n　　日子不必匆忙，脚步可以坚定。愿你始终对世界保有好奇，在平凡的生活里，也能发现值得珍藏的光。\n　　当你再次读到这封信，希望仍记得出发时的心情：认真学习，真诚待人，把喜欢的事情慢慢做好。\n　　愿未来的你，眼中有光，心中有爱。\n一个晴朗的午后\n2026年10月20日',
     formats: ['title', 'salutation', 'body', 'body', 'body', 'body', 'signature', 'signature'],
   }
 }
@@ -64,7 +63,6 @@ export function normalizeSettings(value: unknown): Settings {
   return {
     ...base,
     cellSize: bounded(s.cellSize, 30, 18, maxCellSize(base)),
-    indent: bounded(s.indent, 2, 0, 4),
     punctuation: s.punctuation === 'strict' ? 'strict' : 'hang',
     pairAscii: typeof s.pairAscii === 'boolean' ? s.pairAscii : true,
     gridColor: ['#bb786b', '#628a77', '#858581'].includes(s.gridColor ?? '') ? s.gridColor! : '#bb786b',

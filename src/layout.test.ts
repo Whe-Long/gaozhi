@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { graphemes, hitTest, layoutDocument, type Glyph } from './layout'
+import { BLANK, graphemes, hitTest, layoutDocument, locate, type Glyph } from './layout'
 import { DEFAULT_SETTINGS, sampleDraft, type BlockKind, type Draft, type Settings } from './model'
 
 const SMALL: Settings = { ...DEFAULT_SETTINGS, columns: 10, rows: 10 }
@@ -31,28 +31,23 @@ describe('layoutDocument: paragraphs', () => {
     expect(layout.pages).toBe(1)
     expect(layout.glyphs).toEqual([])
     expect(layout.characters).toBe(0)
-    expect(layout.carets[0]).toEqual({ page: 0, row: 0, column: 2 })
+    expect(layout.carets[0]).toEqual({ page: 0, row: 0, column: 0 })
   })
 
-  it('indents body paragraphs and wraps at the column limit', () => {
-    const { glyphs } = layoutDocument(draft('一二三四五六七八九'))
-    expect(cells(glyphs).slice(0, 2)).toEqual([['一', 0, 0, 2], ['二', 0, 0, 3]])
-    expect(cells(glyphs).slice(-2)).toEqual([['八', 0, 0, 9], ['九', 0, 1, 0]])
+  it('starts body paragraphs in the first cell and wraps at the column limit', () => {
+    const { glyphs } = layoutDocument(draft('一二三四五六七八九十甲'))
+    expect(cells(glyphs).slice(0, 2)).toEqual([['一', 0, 0, 0], ['二', 0, 0, 1]])
+    expect(cells(glyphs).slice(-2)).toEqual([['十', 0, 0, 9], ['甲', 0, 1, 0]])
   })
 
-  it('treats the indent as layout, not text', () => {
-    expect(layoutDocument(draft('一', undefined, { indent: 4 })).glyphs[0].column).toBe(4)
-    expect(layoutDocument(draft('一', undefined, { indent: 0 })).glyphs[0].column).toBe(0)
-  })
-
-  it('does not add an indent when the paragraph already starts with spaces', () => {
+  it('keeps spaces typed at the start of a paragraph as blank cells', () => {
     const { glyphs } = layoutDocument(draft('　　一'))
     expect(cells(glyphs)).toEqual([['　', 0, 0, 0], ['　', 0, 0, 1], ['一', 0, 0, 2]])
   })
 
   it('starts each paragraph on a new line and leaves the rest of the line blank', () => {
     const { glyphs } = layoutDocument(draft('一\n二'))
-    expect(cells(glyphs)).toEqual([['一', 0, 0, 2], ['二', 0, 1, 2]])
+    expect(cells(glyphs)).toEqual([['一', 0, 0, 0], ['二', 0, 1, 0]])
   })
 
   it('keeps salutations flush left', () => {
@@ -101,11 +96,11 @@ describe('layoutDocument: pagination', () => {
 })
 
 describe('layoutDocument: punctuation', () => {
-  // Nine characters after a two-cell indent fill the first line minus one cell.
-  const almostFull = '一二三四五六七'
+  // Nine characters fill the first line minus one cell.
+  const almostFull = '一二三四五六七八九'
 
   it('hangs a closing mark outside the grid when the line is full', () => {
-    const { glyphs } = layoutDocument(draft(almostFull + '八，后'))
+    const { glyphs } = layoutDocument(draft(almostFull + '十，后'))
     const comma = glyphFor(glyphs, '，')
     expect(comma).toMatchObject({ row: 0, hanging: true })
     expect(comma.column).toBeGreaterThan(9)
@@ -113,21 +108,21 @@ describe('layoutDocument: punctuation', () => {
   })
 
   it('hangs at most two closing marks', () => {
-    const { glyphs } = layoutDocument(draft(almostFull + '八。”）'))
+    const { glyphs } = layoutDocument(draft(almostFull + '十。”）'))
     expect(glyphs.filter(g => g.hanging).map(g => g.text)).toEqual(['。', '”'])
     expect(glyphFor(glyphs, '）')).toMatchObject({ row: 1, column: 0, hanging: false })
   })
 
   it('carries the previous character in strict mode instead of starting a line with punctuation', () => {
-    const { glyphs } = layoutDocument(draft(almostFull + '八，后', undefined, { punctuation: 'strict' }))
+    const { glyphs } = layoutDocument(draft(almostFull + '十，后', undefined, { punctuation: 'strict' }))
     expect(glyphs.some(g => g.hanging)).toBe(false)
-    expect(glyphFor(glyphs, '八')).toMatchObject({ row: 1, column: 0 })
+    expect(glyphFor(glyphs, '十')).toMatchObject({ row: 1, column: 0 })
     expect(glyphFor(glyphs, '，')).toMatchObject({ row: 1, column: 1 })
   })
 
   it('keeps consecutive closing marks with their character in strict mode', () => {
-    const { glyphs } = layoutDocument(draft(almostFull + '八。”', undefined, { punctuation: 'strict' }))
-    expect(cells(glyphs).slice(-3)).toEqual([['八', 0, 1, 0], ['。', 0, 1, 1], ['”', 0, 1, 2]])
+    const { glyphs } = layoutDocument(draft(almostFull + '十。”', undefined, { punctuation: 'strict' }))
+    expect(cells(glyphs).slice(-3)).toEqual([['十', 0, 1, 0], ['。', 0, 1, 1], ['”', 0, 1, 2]])
   })
 
   it('never leaves an opening mark at the end of a line', () => {
@@ -149,7 +144,7 @@ describe('layoutDocument: punctuation', () => {
   })
 
   it('moves a two-cell mark to the next line rather than splitting it', () => {
-    const { glyphs } = layoutDocument(draft(almostFull + '八……'))
+    const { glyphs } = layoutDocument(draft(almostFull + '十……'))
     expect(glyphFor(glyphs, '……')).toMatchObject({ row: 1, column: 0 })
   })
 
@@ -225,5 +220,49 @@ describe('hitTest', () => {
   it('resolves clicks below the text to the nearest line', () => {
     expect(at(9, 0)).toBe(4)
     expect(at(0, 0, 1)).toBe(4)
+  })
+})
+
+describe('locate', () => {
+  const d = draft('AB\n\nCD', ['body', 'body', 'title'], { pairAscii: false })
+  const layout = layoutDocument(d)
+  const at = (row: number, column: number, page = 0) => locate(layout, page, row, column, d.settings)
+
+  it('behaves like hitTest on text', () => {
+    expect(at(0, 0.4)).toEqual({ offset: 0, padding: '', cell: null })
+    expect(at(0, 2.3)).toEqual({ offset: 2, padding: '', cell: null })
+  })
+
+  it('pads blank cells after the end of a paragraph with full-width spaces', () => {
+    expect(at(0, 5.7)).toEqual({ offset: 2, padding: BLANK.repeat(3), cell: { page: 0, row: 0, column: 5 } })
+  })
+
+  it('pads an empty paragraph from its first cell', () => {
+    expect(at(1, 4.2)).toEqual({ offset: 3, padding: BLANK.repeat(4), cell: { page: 0, row: 1, column: 4 } })
+    expect(at(1, 0.2)).toEqual({ offset: 3, padding: '', cell: null })
+  })
+
+  it('adds paragraphs to reach blank rows below the text', () => {
+    expect(at(5, 3)).toEqual({ offset: 6, padding: '\n\n\n' + BLANK.repeat(3), cell: { page: 0, row: 5, column: 3 } })
+    expect(at(3, 0)).toEqual({ offset: 6, padding: '\n', cell: { page: 0, row: 3, column: 0 } })
+  })
+
+  it('reaches blank rows on later pages', () => {
+    expect(at(0, 1, 1).padding).toBe('\n'.repeat(8) + BLANK)
+  })
+
+  it('clamps clicks on the right edge to the last cell', () => {
+    expect(at(0, 10).cell).toEqual({ page: 0, row: 0, column: 9 })
+  })
+
+  it('snaps around centred titles and right-aligned signatures', () => {
+    expect(at(2, 8)).toMatchObject({ padding: '', cell: null })
+    expect(at(2, 0)).toMatchObject({ offset: 4, padding: '', cell: null })
+  })
+
+  it('snaps on lines that continue on the next row', () => {
+    const strict = draft('一二三四五六七八九十，', ['body'], { punctuation: 'strict' })
+    const wrapped = layoutDocument(strict)
+    expect(locate(wrapped, 0, 0, 9.5, strict.settings)).toMatchObject({ padding: '', cell: null })
   })
 })

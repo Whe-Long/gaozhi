@@ -1,16 +1,16 @@
 import { expect, test } from '@playwright/test'
-import { editor, glyphs, makeDraft, openWith, pageCount, paperText, setCaret } from './helpers'
+import { clickCell, editor, glyphs, makeDraft, openWith, pageCount, paperText, setCaret } from './helpers'
 
 test.describe('typing and editing', () => {
   test('clicking the paper focuses the editor and typed text appears in cells', async ({ page }) => {
     await openWith(page, makeDraft(''))
     await expect(page.getByText('点击任意位置，写下第一句话。')).toBeVisible()
-    await page.locator('.paper-grid').first().click({ position: { x: 40, y: 10 } })
+    await clickCell(page, 0, 0)
     await expect(editor(page)).toBeFocused()
     await page.keyboard.type('春天来了。')
     await expect.poll(() => paperText(page)).toBe('春天来了。')
     await expect(page.locator('.status-bar')).toContainText('5 字')
-    await expect(page.locator('.status-bar')).toContainText('第 1 页 · 第 1 行 · 第 8 格')
+    await expect(page.locator('.status-bar')).toContainText('第 1 页 · 第 1 行 · 第 6 格')
   })
 
   test('IME composition commits as one edit and one undo step', async ({ page }) => {
@@ -37,9 +37,9 @@ test.describe('typing and editing', () => {
     await page.evaluate(() => navigator.clipboard.writeText('\n第一段。\n第二段。'))
     await page.keyboard.press('ControlOrMeta+v')
     await expect.poll(() => paperText(page)).toBe('标题第一段。第二段。')
-    // Body paragraphs start after the two-cell indent on their own rows.
-    const first = glyphs(page).filter({ hasText: '第' }).first()
-    await expect(first).toHaveAttribute('style', /left: 60px/)
+    // Each pasted paragraph starts in the first cell of its own row.
+    await expect(glyphs(page).filter({ hasText: '第' }).first()).toHaveAttribute('style', /left: 0px; top: 42px/)
+    await expect(glyphs(page).filter({ hasText: '第' }).last()).toHaveAttribute('style', /left: 0px; top: 84px/)
   })
 
   test('deleting a selection across pages reflows and undo restores it', async ({ page }) => {
@@ -61,25 +61,24 @@ test.describe('typing and editing', () => {
   })
 
   test('Enter at the end of a title keeps the next paragraph format', async ({ page }) => {
-    await openWith(page, makeDraft('标题\n老师：', ['title', 'salutation']))
+    await openWith(page, makeDraft('标题\n张三', ['title', 'signature']))
     await setCaret(page, 2)
     await page.keyboard.press('Enter')
     await expect(page.getByRole('button', { name: '正文', exact: true })).toHaveAttribute('aria-pressed', 'true')
-    // The salutation stays flush left on row 3.
-    const salutation = glyphs(page).filter({ hasText: '老' })
-    await expect(salutation).toHaveAttribute('style', /left: 0px/)
+    // The signature stays right-aligned, now on row 3.
+    await expect(glyphs(page).filter({ hasText: '张' })).toHaveAttribute('style', /left: 540px; top: 84px/)
   })
 
   test('pasting a line that repeats the next paragraph start keeps formats in place', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
-    await openWith(page, makeDraft('标题\n老师：', ['title', 'salutation']))
+    await openWith(page, makeDraft('标题\n张三', ['title', 'signature']))
     await setCaret(page, 2)
-    await page.evaluate(() => navigator.clipboard.writeText('\n老'))
+    await page.evaluate(() => navigator.clipboard.writeText('\n张'))
     await page.keyboard.press('ControlOrMeta+v')
-    await expect.poll(() => paperText(page)).toBe('标题老老师：')
-    // The pasted "老" is an indented body line; "老师：" stays flush left below it.
-    await expect(glyphs(page).nth(2)).toHaveAttribute('style', /left: 60px; top: 42px/)
-    await expect(glyphs(page).nth(3)).toHaveAttribute('style', /left: 0px; top: 84px/)
+    await expect.poll(() => paperText(page)).toBe('标题张张三')
+    // The pasted "张" is a body line; "张三" stays right-aligned below it.
+    await expect(glyphs(page).nth(2)).toHaveAttribute('style', /left: 0px; top: 42px/)
+    await expect(glyphs(page).nth(3)).toHaveAttribute('style', /left: 540px; top: 84px/)
   })
 
   test('format buttons change the paragraph under the caret', async ({ page }) => {
