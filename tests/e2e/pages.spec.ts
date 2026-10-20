@@ -54,6 +54,33 @@ test.describe('adding and removing pages', () => {
     await expect(glyphs(page).last()).toBeVisible()
   })
 
+  test('pasting more text than the pages hold adds pages to fit it', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+    await openWith(page, makeDraft('', {}, 2))
+    // 1,000 characters fill two and a half 400-cell pages.
+    const long = '字'.repeat(1000)
+    await page.evaluate(text => navigator.clipboard.writeText(text), long)
+    await clickCell(page, 0, 0)
+    await page.keyboard.press('ControlOrMeta+v')
+    await expect.poll(() => pageCount(page)).toBe(3)
+    await expect(page.locator('.status-bar')).toContainText('共 3 页')
+    await expect(page.locator('.paper-grid[data-page="2"] .glyph')).toHaveCount(200)
+
+    await page.keyboard.press('ControlOrMeta+z')
+    await expect.poll(() => pageCount(page)).toBe(2)
+  })
+
+  test('importing a long text adds pages to fit it', async ({ page }) => {
+    await openWith(page, makeDraft(''))
+    const lines = Array.from({ length: 70 }, (_, i) => `第${i + 1}行`).join('\n')
+    await page.locator('input[type=file]').setInputFiles({ name: '长文.txt', mimeType: 'text/plain', buffer: Buffer.from(lines) })
+    // 70 paragraphs at 20 rows per page need four pages.
+    await expect.poll(() => pageCount(page)).toBe(4)
+    const lastPage = page.locator('.paper-grid[data-page="3"] .glyph')
+    await expect(lastPage.filter({ hasText: '70' })).toHaveCount(1)
+    await expect(lastPage.last()).toHaveText('行')
+  })
+
   test('the workspace scrolls through the pages', async ({ page }) => {
     await openWith(page, makeDraft('字', {}, 3))
     const workspace = page.locator('.workspace')
