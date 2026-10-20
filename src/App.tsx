@@ -25,6 +25,10 @@ const browserStorage: DraftStorage = {
   setItem: (key, value) => localStorage.setItem(key, value),
 }
 
+function parseBackup(content: string): unknown {
+  try { return JSON.parse(content) } catch { throw new Error('这不是有效的稿纸备份文件。') }
+}
+
 function downloadFile(content: string, name: string, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }))
   const a = document.createElement('a')
@@ -229,16 +233,21 @@ export default function App() {
       if (file.size > 256_000) throw new Error('文件过大，请导入小于 256 KB 的文稿。')
       const content = await file.text()
       let next: Draft
-      if (file.name.toLowerCase().endsWith('.json')) next = validateDraft(JSON.parse(content))
+      if (file.name.toLowerCase().endsWith('.json')) next = validateDraft(parseBackup(content))
       else {
         const text = content.replace(/\r\n?/g, '\n')
         if (text.length > MAX_LENGTH) throw new Error('文稿过长，请分成每份不超过 20,000 个文本编码单元的文件。')
         next = { ...emptyDraft(), settings: draftRef.current.settings, name: file.name.replace(/\.[^.]+$/, ''), text }
       }
+      // Ask only once the file is known to be importable, and only if something would be replaced.
+      if (draftRef.current.text && !window.confirm(`导入“${file.name}”会替换当前文稿。导入后可以撤销，是否继续？`)) return
       apply(next, START, true, true)
       setToast('已导入文稿。可以通过撤销返回导入前的内容。')
-    } catch (error) { setToast(error instanceof Error ? error.message : '文件未能导入。') }
-    if (importInput.current) importInput.current.value = ''
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '文件未能导入。')
+    } finally {
+      if (importInput.current) importInput.current.value = ''
+    }
   }
 
   function newDocument(example = false) {

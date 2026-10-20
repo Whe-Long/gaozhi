@@ -75,4 +75,42 @@ test.describe('local saving', () => {
     expect(backup.name).toBe('测试文稿.json')
     await expect(page.getByLabel('每行格数')).toHaveValue('16')
   })
+
+  test('importing over existing text asks first and keeps it when cancelled', async ({ page }) => {
+    await openWith(page, makeDraft('原来的内容'))
+    const file = { name: '新文稿.txt', mimeType: 'text/plain', buffer: Buffer.from('导入的内容') }
+    const messages: string[] = []
+
+    page.once('dialog', dialog => { messages.push(dialog.message()); void dialog.dismiss() })
+    await page.locator('input[type=file]').setInputFiles(file)
+    await expect.poll(() => messages).toHaveLength(1)
+    expect(messages[0]).toContain('新文稿.txt')
+    await expect.poll(() => paperText(page)).toBe('原来的内容')
+
+    page.once('dialog', dialog => void dialog.accept())
+    await page.locator('input[type=file]').setInputFiles(file)
+    await expect.poll(() => paperText(page)).toBe('导入的内容')
+    await expect(page.getByLabel('文稿名称')).toHaveValue('新文稿')
+  })
+
+  test('importing into an empty draft does not ask', async ({ page }) => {
+    await openWith(page, makeDraft(''))
+    let asked = false
+    page.on('dialog', dialog => { asked = true; void dialog.dismiss() })
+    await page.locator('input[type=file]').setInputFiles({ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('内容') })
+    await expect.poll(() => paperText(page)).toBe('内容')
+    expect(asked).toBe(false)
+  })
+
+  test('an invalid backup is rejected before asking', async ({ page }) => {
+    await openWith(page, makeDraft('原来的内容'))
+    let asked = false
+    page.on('dialog', dialog => { asked = true; void dialog.dismiss() })
+    await page.locator('input[type=file]').setInputFiles({ name: 'x.json', mimeType: 'application/json', buffer: Buffer.from('{}') })
+    await expect(page.locator('.toast')).toContainText('不受支持')
+    await page.locator('input[type=file]').setInputFiles({ name: 'y.json', mimeType: 'application/json', buffer: Buffer.from('not json') })
+    await expect(page.locator('.toast')).toContainText('这不是有效的稿纸备份文件')
+    expect(asked).toBe(false)
+    await expect.poll(() => paperText(page)).toBe('原来的内容')
+  })
 })
