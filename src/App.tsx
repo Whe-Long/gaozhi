@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { ArrowDownToLine, ArrowUpFromLine, Check, ChevronDown, FilePlus2, HelpCircle, Minus, PanelLeftClose, PanelLeftOpen, Plus, Printer, Redo2, RotateCcw, Settings2, Undo2, X } from 'lucide-react'
 import { hitTest, layoutDocument, type Layout } from './layout'
 import { BLOCK_LABELS, DEFAULT_SETTINGS, emptyDraft, MAX_LENGTH, maxCellSize, normalizeSettings, PAGE_HEIGHT, PAGE_WIDTH, sampleDraft, STORAGE_KEY, validateDraft, withText, type BlockKind, type Draft, type Settings } from './model'
+import { loadDraft, readBackup, type DraftStorage } from './storage'
 
 interface Selection { start: number; end: number; direction: 'forward' | 'backward' | 'none' }
 interface Snapshot { draft: Draft; selection: Selection }
@@ -9,11 +10,10 @@ const START: Selection = { start: 0, end: 0, direction: 'none' }
 const focusOffset = (s: Selection) => s.direction === 'backward' ? s.start : s.end
 const readSelection = (el: HTMLTextAreaElement): Selection => ({ start: el.selectionStart, end: el.selectionEnd, direction: el.selectionDirection })
 
-function loadInitial(): { draft: Draft; error: string } {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return { draft: raw ? validateDraft(JSON.parse(raw)) : sampleDraft(), error: '' }
-  } catch { return { draft: sampleDraft(), error: '上次草稿未能读取。若有备份，可通过“导入”恢复。' } }
+// Property access is deferred so a blocked localStorage throws inside the storage helpers.
+const browserStorage: DraftStorage = {
+  getItem: key => localStorage.getItem(key),
+  setItem: (key, value) => localStorage.setItem(key, value),
 }
 
 function downloadFile(content: string, name: string, type: string) {
@@ -24,7 +24,11 @@ function downloadFile(content: string, name: string, type: string) {
 }
 
 export default function App() {
-  const initial = useMemo(loadInitial, [])
+  const initial = useMemo(() => loadDraft(browserStorage), [])
+  const [unreadable] = useState(() => initial.unreadable ?? readBackup(browserStorage))
+  const [autosave, setAutosave] = useState(initial.autosave)
+  const autosaveRef = useRef(autosave)
+  autosaveRef.current = autosave
   const [draft, setDraft] = useState(initial.draft)
   const draftRef = useRef(draft)
   const [selection, setSelection] = useState<Selection>(START)
@@ -35,7 +39,7 @@ export default function App() {
   const undo = useRef<Snapshot[]>([])
   const redo = useRef<Snapshot[]>([])
   const [, refreshHistory] = useState(0)
-  const [saveStatus, setSaveStatus] = useState<'saving' | 'saved' | 'failed'>('saving')
+  const [saveStatus, setSaveStatus] = useState<'saving' | 'saved' | 'failed' | 'paused'>('saving')
   const [toast, setToast] = useState(initial.error)
   const [zoom, setZoom] = useState<number | 'fit'>('fit')
   const [fitScale, setFitScale] = useState(0.8)
@@ -138,6 +142,7 @@ export default function App() {
   }, [scale])
 
   useEffect(() => {
+    if (!autosave) { setSaveStatus('paused'); return }
     if (composing) return
     setSaveStatus('saving')
     const id = setTimeout(() => {
@@ -145,10 +150,10 @@ export default function App() {
       catch { setSaveStatus('failed') }
     }, 350)
     return () => clearTimeout(id)
-  }, [draft, composing])
+  }, [draft, composing, autosave])
 
   useEffect(() => {
-    const flush = () => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(draftRef.current)) } catch { /* visible save status handles errors */ } }
+    const flush = () => { if (!autosaveRef.current) return; try { localStorage.setItem(STORAGE_KEY, JSON.stringify(draftRef.current)) } catch { /* visible save status handles errors */ } }
     window.addEventListener('pagehide', flush)
     const handleVisibility = () => { if (document.visibilityState === 'hidden') flush() }
     document.addEventListener('visibilitychange', handleVisibility)
@@ -192,6 +197,14 @@ export default function App() {
     downloadFile(type === 'json' ? JSON.stringify(current, null, 2) : current.text,
       `${name}.${type}`, type === 'json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8')
     setToast(type === 'json' ? '已导出备份，包含正文、格式和纸张设置。' : '已导出纯文字。')
+    document.querySelector<HTMLDetailsElement>('.export-menu')?.removeAttribute('open')
+  }
+
+  function exportUnreadable() {
+    if (unreadable === null) return
+    downloadFile(unreadable, '无法读取的草稿.txt', 'text/plain;charset=utf-8')
+    setAutosave(true)
+    setToast('已下载无法读取的草稿原文，自动保存已恢复。')
     document.querySelector<HTMLDetailsElement>('.export-menu')?.removeAttribute('open')
   }
 
@@ -261,15 +274,15 @@ export default function App() {
     }
   }
 
-  const saveLabel = saveStatus === 'saved' ? '已保存在此浏览器' : saveStatus === 'saving' ? '正在保存…' : '自动保存失败，请导出备份'
+  const saveLabel = { saved: '已保存在此浏览器', saving: '正在保存…', failed: '自动保存失败，请导出备份', paused: '自动保存已暂停' }[saveStatus]
   return <div className={`app ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
     <header className="app-header">
       <a className="brand" href="/" aria-label="稿纸首页"><span className="brand-icon"><i /><i /><i /><i /></span><strong>稿纸</strong><span className="brand-en">GAOZHI</span></a>
-      <div className={`save-state ${saveStatus === 'failed' ? 'error' : ''}`} role="status"><span className="status-dot" />{saveLabel}</div>
+      <div className={`save-state ${saveStatus === 'failed' || saveStatus === 'paused' ? 'error' : ''}`} role="status"><span className="status-dot" />{saveLabel}</div>
       <div className="header-actions">
         <button className="button subtle new-button" onClick={() => newDocument()}><FilePlus2 size={16} /><span>新建</span></button>
         <button className="button subtle" onClick={() => importInput.current?.click()}><ArrowUpFromLine size={16} /><span>导入</span></button>
-        <details className="export-menu"><summary className="button subtle"><ArrowDownToLine size={16} /><span>导出</span><ChevronDown size={13} /></summary><div className="popover"><button onClick={() => exportDraft('json')}>稿纸备份 <small>.json · 保留格式</small></button><button onClick={() => exportDraft('txt')}>纯文字 <small>.txt</small></button></div></details>
+        <details className="export-menu"><summary className="button subtle"><ArrowDownToLine size={16} /><span>导出</span><ChevronDown size={13} /></summary><div className="popover"><button onClick={() => exportDraft('json')}>稿纸备份 <small>.json · 保留格式</small></button><button onClick={() => exportDraft('txt')}>纯文字 <small>.txt</small></button>{unreadable !== null && <button onClick={exportUnreadable}>无法读取的草稿 <small>.txt · 原文</small></button>}</div></details>
         <button className="button primary" onClick={() => window.print()}><Printer size={16} /><span>打印 / PDF</span></button>
       </div>
       <input ref={importInput} type="file" accept=".txt,.json,text/plain,application/json" className="sr-only" tabIndex={-1} aria-label="导入文稿文件" onChange={event => void importFile(event.target.files?.[0])} />
