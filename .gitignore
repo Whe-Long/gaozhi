@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+
+# JavaScript dependencies and build output
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.vite/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+
+# Personal source documents and local drafts
+private/
+local-data/
+
+# Editor state
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
